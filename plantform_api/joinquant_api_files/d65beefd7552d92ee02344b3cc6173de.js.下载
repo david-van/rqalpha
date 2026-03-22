@@ -1,0 +1,4055 @@
+(() => {
+  (function() {
+    var proxy;
+    var chatProxy;
+    var local = window.setting ? window.setting.langJson || {} : {};
+    var isOnline = function() {
+      try {
+        return [ "online", "online-sg", "gray", "release" ].indexOf("online") > -1;
+      } catch (e) {
+        return false;
+      }
+    };
+    var appKey = window.appKey || "";
+    var remoteSetting = {};
+    var urlSetting = {};
+    var inviteSetting = {};
+    var sdkSetting = {};
+    var sdkURL = "";
+    var corpSetting = {};
+    var settingUrl = "/webapi/sdk/setting/data";
+    try {
+      window.__YSFSDKADR__ = "https://qiyukf.com" || 0;
+      window.__YSFDAROOT__ = "https://da.qiyukf.com/webda/da.gif" || 0;
+    } catch (e) {
+      window.__YSFSDKADR__ = "https://qytest.netease.com";
+      window.__YSFDAROOT__ = "https://da.qiyukf.com/webda/da.gif";
+    }
+    function getAppKey(e) {
+      e = e || document.currentScript.src;
+      var t = e.match(/script\/(.*?)\.js/);
+      return t && t[1];
+    }
+    function getCurrentScriptParams(e) {
+      if (document.currentScript) {
+        var t = document.currentScript.src;
+        appKey = getAppKey(t);
+        var i = new URL(t);
+        return i.searchParams.get(e);
+      } else {
+        var o = document.getElementsByTagName("script");
+        var n = o[o.length - 1].src;
+        appKey = getAppKey(t);
+        var r = {};
+        var a = n.split("?")[1];
+        if (a) {
+          var s = /([^&=]+)=([^&]*)/g;
+          var c;
+          while (c = s.exec(a)) {
+            r[decodeURIComponent(c[1])] = decodeURIComponent(c[2]);
+          }
+        }
+        return r[e];
+      }
+    }
+    function PromisePolyfill(e) {
+      this.state = "pending";
+      this.value = undefined;
+      this.handlers = [];
+      var t = function(e) {
+        if (this.state === "pending") {
+          this.state = "fulfilled";
+          this.value = e;
+          this.handlers.forEach((function(t) {
+            t.onFulfilled(e);
+          }));
+        }
+      }.bind(this);
+      var i = function(e) {
+        if (this.state === "pending") {
+          this.state = "rejected";
+          this.value = e;
+          this.handlers.forEach((function(t) {
+            t.onRejected(e);
+          }));
+        }
+      }.bind(this);
+      try {
+        e(t, i);
+      } catch (e) {
+        i(e);
+      }
+    }
+    var each = function(e, t) {
+      if (!e || !t) {
+        return;
+      }
+      for (var i in e) {
+        if (e.hasOwnProperty(i)) {
+          t.call(null, i, e[i]);
+        }
+      }
+    };
+    var serialize = function(e, t) {
+      var i = [];
+      each(e, (function(e, o) {
+        if (t && o == undefined) {} else {
+          i.push(encodeURIComponent(e) + "=" + encodeURIComponent(o));
+        }
+      }));
+      return i.join("&");
+    };
+    PromisePolyfill.prototype.then = function(e, t) {
+      var i = this;
+      return new PromisePolyfill((function(o, n) {
+        if (i.state === "fulfilled") {
+          setTimeout((function() {
+            try {
+              if (typeof e === "function") {
+                o(e(i.value));
+              } else {
+                o(i.value);
+              }
+            } catch (e) {
+              n(e);
+            }
+          }), 0);
+        } else if (i.state === "rejected") {
+          setTimeout((function() {
+            try {
+              if (typeof t === "function") {
+                o(t(i.value));
+              } else {
+                n(i.value);
+              }
+            } catch (e) {
+              n(e);
+            }
+          }), 0);
+        } else {
+          i.handlers.push({
+            onFulfilled: function(t) {
+              try {
+                if (typeof e === "function") {
+                  o(e(t));
+                } else {
+                  o(t);
+                }
+              } catch (e) {
+                n(e);
+              }
+            },
+            onRejected: function(e) {
+              try {
+                if (typeof t === "function") {
+                  o(t(e));
+                } else {
+                  n(e);
+                }
+              } catch (e) {
+                n(e);
+              }
+            }
+          });
+        }
+      }));
+    };
+    PromisePolyfill.prototype.catch = function(e) {
+      return this.then(null, e);
+    };
+    var util = {
+      isFrameModule: function() {
+        if (util.isMobilePlatform() && window.__YSFMODILEWINTYPE__ === 2) {
+          return "mobileFrame";
+        } else if (!util.isMobilePlatform() && window.__YSFWINTYPE__ === 1) {
+          return "webFrame";
+        } else {
+          false;
+        }
+      },
+      isMobilePlatform: function() {
+        const e = navigator.userAgent;
+        if (/OpenHarmony/i.test(e) && /\bPC\b/i.test(e)) {
+          return false;
+        }
+        return !!/(iPhone|iPad|iPod|iOS|Android|OpenHarmony)/i.test(e);
+      },
+      isIOSorSafari: function() {
+        return !!(/(iPhone|iPad|iOS|mini)/i.test(navigator.userAgent) || (navigator.userAgent.indexOf("Safari") > -1 || ~navigator.userAgent.indexOf("AppleWebKit")) && navigator.userAgent.indexOf("Chrome") == -1);
+      },
+      isFirefox: function() {
+        return navigator.userAgent.indexOf("Firefox") !== -1;
+      },
+      createAjax: function() {
+        var e = null;
+        var t = [ "Msxml2.XMLHTTP.6.0", "Msxml2.XMLHTTP.3.0", "Msxml2.XMLHTTP.4.0", "Msxml2.XMLHTTP.5.0", "MSXML2.XMLHTTP", "Microsoft.XMLHTTP" ];
+        if (window.XMLHttpRequest) {
+          e = new XMLHttpRequest;
+          if ("withCredentials" in e) {
+            return e;
+          }
+        }
+        if (window.xDomainRequest) {
+          e = new Window.xDomainRequest;
+        }
+        return e;
+      },
+      mergeParams: function(e) {
+        var t = [];
+        for (var i in e) {
+          if (e.hasOwnProperty(i)) {
+            t.push(encodeURIComponent(i) + "=" + encodeURIComponent(e[i]));
+          }
+        }
+        return t.join("&");
+      },
+      ajax: function(conf) {
+        var method = conf.method || "get", contentType = conf.contentType, url = conf.url, data = conf.data, result = {}, success = conf.success, error = conf.error, fullResult = conf.fullResult || false;
+        var xhr = util.createAjax();
+        if (!xhr) {
+          error("NOT SUPPORT XHR");
+          return;
+        }
+        try {
+          if (method.toUpperCase() === "GET") {
+            if (data) {
+              url = url + "?" + util.mergeParams(data);
+            }
+          }
+          if (conf.synchronous) {
+            xhr.open(method, url, false);
+          } else {
+            xhr.open(method, url);
+          }
+        } catch (e) {
+          console.error(e);
+          error(e);
+          return;
+        }
+        xhr.onreadystatechange = function() {
+          if (xhr.readyState == 4) {
+            if (xhr.status === 200) {
+              try {
+                result = eval("(" + xhr.responseText + ")");
+              } catch (e) {
+                error(e);
+                return;
+              }
+              if ((result && result.code) == 200) {
+                success(fullResult ? result : result.result);
+              } else {
+                error(result);
+              }
+            } else {
+              error();
+            }
+          }
+        };
+        if (method.toUpperCase() === "GET") {
+          xhr.send(null);
+        } else {
+          if (contentType === "json") {
+            xhr.setRequestHeader("content-type", "application/json");
+            xhr.send(JSON.stringify(data));
+          } else {
+            xhr.setRequestHeader("content-type", "application/x-www-form-urlencoded");
+            xhr.send(util.mergeParams(data));
+          }
+        }
+      },
+      findLocalItems: function(e, t) {
+        var i, o = [], n;
+        for (i in localStorage) {
+          if (i.match(e) || !e && typeof i === "string") {
+            n = !t ? localStorage.getItem(i) : JSON.parse(localStorage.getItem(i));
+            o.push({
+              key: i,
+              val: n
+            });
+          }
+        }
+        return o;
+      },
+      clearLocalItems: function(e) {
+        for (var t = 0; t < e.length; t++) {
+          window.localStorage.removeItem(e[t].key);
+        }
+      },
+      addEvent: function(e, t, i) {
+        if (e.addEventListener) {
+          e.addEventListener(t, i, false);
+        } else if (e.attachEvent) {
+          e.attachEvent("on" + t, i);
+        }
+      },
+      isIe: function() {
+        return !!window.ActiveXObject || "ActiveXObject" in window;
+      },
+      isEdge: function() {
+        return navigator.userAgent.indexOf("Edge") > -1;
+      },
+      addLoadEventForProxy: function() {
+        function e() {
+          for (var e = i.length - 1; e >= 0; e--) {
+            i[e]();
+          }
+        }
+        var t = false;
+        var i = [];
+        return function(o) {
+          i.push(o);
+          if (t) {
+            return;
+          }
+          if (proxy.addEventListener) {
+            proxy.addEventListener("load", e, false);
+          } else if (proxy.attachEvent) {
+            proxy.attachEvent("onload", e);
+          }
+          t = true;
+        };
+      }(),
+      mergeUrl: function(e, t) {
+        var i = e.split("?"), o = i.shift(), n = util.query2Object(i.shift() || "", "&");
+        for (var r in t) {
+          n[r] = t[r];
+        }
+        return o + "?" + serialize(n);
+      },
+      query2Object: function(e, t) {
+        var i = e.split(t), o = {};
+        for (var n = 0; n < i.length; n++) {
+          var r = i[n], a = (r || "").split("="), s = a.shift();
+          if (!s) {
+            continue;
+          }
+          o[decodeURIComponent(s)] = decodeURIComponent(a.join("="));
+        }
+        return o;
+      },
+      isFunction: function(e) {
+        return {}.toString.call(e).toLowerCase() === "[object function]" || {}.toString.call(e).toLowerCase() === "[object asyncfunction]";
+      },
+      isArray: function(e) {
+        return {}.toString.call(e).toLowerCase() === "[object array]";
+      },
+      notification: function() {
+        var e, t;
+        return function(i) {
+          if (e) {
+            clearTimeout(t);
+            e.close();
+          }
+          if (window.Notification && window.Notification.permission !== "granted") {
+            Notification.requestPermission();
+          }
+          if (window.Notification && window.Notification.permission != "denied") {
+            e = new Notification(i.notify, {
+              tag: i.tag,
+              body: i.body,
+              icon: i.icon.indexOf("http") > -1 ? i.icon : window.__YSFSDKADR__ + i.icon
+            });
+            util.playAudio();
+            e.onclick = function() {
+              e && e.close();
+              window.focus();
+              ysf.openLayer();
+              ysf.NotifyMsgAndBubble({
+                category: "clearCircle"
+              });
+            };
+            t = window.setTimeout((function() {
+              e.close();
+            }), 2e4);
+          }
+        };
+      }(),
+      playAudio: function() {
+        if (window.__YSFSDKADR__) {
+          var e = document.createElement("audio");
+          e.src = "//ysf.nosdn.127.net/webapi/38a7410cdf36ef88290e0136e0f86998";
+          return function() {
+            e.play();
+          };
+        }
+      }(),
+      encode: function(e, t) {
+        t = "" + t;
+        if (!e || !t) {
+          return t || "";
+        }
+        return t.replace(e.r, (function(t) {
+          var i = e[!e.i ? t.toLowerCase() : t];
+          return i != null ? i : t;
+        }));
+      },
+      escape: function() {
+        var e = /<br\/?>$/, t = {
+          r: /\<|\>|\&|\r|\n|\s|\'|\"/g,
+          "<": "&lt;",
+          ">": "&gt;",
+          "&": "&amp;",
+          " ": "&nbsp;",
+          '"': "&quot;",
+          "'": "&#39;",
+          "\n": "<br/>",
+          "\r": ""
+        };
+        return function(i) {
+          i = util.encode(t, i);
+          return i.replace(e, "<br/><br/>");
+        };
+      }(),
+      unescape: function() {
+        var e = {
+          r: /\&(?:lt|gt|amp|nbsp|#39|quot)\;|\<br\/\>/gi,
+          "&lt;": "<",
+          "&gt;": ">",
+          "&amp;": "&",
+          "&nbsp;": " ",
+          "&#39;": "'",
+          "&quot;": '"',
+          "<br/>": "\n"
+        };
+        return function(t) {
+          return util.encode(e, t);
+        };
+      }(),
+      replaceRichAndUnescape: function(e) {
+        var t = /<img[^>]+>/g;
+        e = e.replace(t, "[" + (local.IMAGE || "图片") + "]");
+        var i = /<\/?[^>]*>/g;
+        e = e.replace(i, "");
+        return util.unescape(e);
+      },
+      consoleError: function(e) {
+        window.console && window.console.error(e);
+      },
+      consoleWarn: function(e) {
+        window.console && window.console.warn(e);
+      },
+      getToday: function() {
+        var e = new Date;
+        return e.getFullYear() + "-" + e.getMonth() + "-" + e.getDate();
+      },
+      Base64: function() {
+        var e = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+        this.encode = function(t) {
+          var i = "";
+          var o, n, r, a, s, c, l;
+          var f = 0;
+          t = _utf8_encode(t);
+          while (f < t.length) {
+            o = t.charCodeAt(f++);
+            n = t.charCodeAt(f++);
+            r = t.charCodeAt(f++);
+            a = o >> 2;
+            s = (o & 3) << 4 | n >> 4;
+            c = (n & 15) << 2 | r >> 6;
+            l = r & 63;
+            if (isNaN(n)) {
+              c = l = 64;
+            } else if (isNaN(r)) {
+              l = 64;
+            }
+            i = i + e.charAt(a) + e.charAt(s) + e.charAt(c) + e.charAt(l);
+          }
+          return i;
+        };
+        this.decode = function(t) {
+          var i = "";
+          var o, n, r;
+          var a, s, c, l;
+          var f = 0;
+          t = t.replace(/[^A-Za-z0-9\+\/\=]/g, "");
+          while (f < t.length) {
+            a = e.indexOf(t.charAt(f++));
+            s = e.indexOf(t.charAt(f++));
+            c = e.indexOf(t.charAt(f++));
+            l = e.indexOf(t.charAt(f++));
+            o = a << 2 | s >> 4;
+            n = (s & 15) << 4 | c >> 2;
+            r = (c & 3) << 6 | l;
+            i = i + String.fromCharCode(o);
+            if (c != 64) {
+              i = i + String.fromCharCode(n);
+            }
+            if (l != 64) {
+              i = i + String.fromCharCode(r);
+            }
+          }
+          i = _utf8_decode(i);
+          return i;
+        };
+        _utf8_encode = function(e) {
+          e = e.replace(/\r\n/g, "\n");
+          var t = "";
+          for (var i = 0; i < e.length; i++) {
+            var o = e.charCodeAt(i);
+            if (o < 128) {
+              t += String.fromCharCode(o);
+            } else if (o > 127 && o < 2048) {
+              t += String.fromCharCode(o >> 6 | 192);
+              t += String.fromCharCode(o & 63 | 128);
+            } else {
+              t += String.fromCharCode(o >> 12 | 224);
+              t += String.fromCharCode(o >> 6 & 63 | 128);
+              t += String.fromCharCode(o & 63 | 128);
+            }
+          }
+          return t;
+        };
+        _utf8_decode = function(e) {
+          var t = "";
+          var i = 0;
+          var o = c1 = c2 = 0;
+          while (i < e.length) {
+            o = e.charCodeAt(i);
+            if (o < 128) {
+              t += String.fromCharCode(o);
+              i++;
+            } else if (o > 191 && o < 224) {
+              c2 = e.charCodeAt(i + 1);
+              t += String.fromCharCode((o & 31) << 6 | c2 & 63);
+              i += 2;
+            } else {
+              c2 = e.charCodeAt(i + 1);
+              c3 = e.charCodeAt(i + 2);
+              t += String.fromCharCode((o & 15) << 12 | (c2 & 63) << 6 | c3 & 63);
+              i += 3;
+            }
+          }
+          return t;
+        };
+      },
+      throttleDebounce: function(e, t, i) {
+        var o, n, r, a;
+        var s = null;
+        var c = null;
+        var l = 0;
+        var f = Date.now || function() {
+          return (new Date).getTime();
+        };
+        if (!i) {
+          i = {};
+        }
+        var d = function() {
+          l = i.leading === false ? 0 : f();
+          s = null;
+          r = e.apply(o, n);
+          if (!s) {
+            o = n = null;
+          }
+        };
+        var u = function() {
+          var i = f() - a;
+          if (i < t && i >= 0) {
+            c = setTimeout(u, t - i);
+          } else {
+            c = null;
+            r = e.apply(o, n);
+            if (!c) {
+              o = n = null;
+            }
+          }
+        };
+        return function() {
+          var u = f();
+          a = u;
+          if (!l && i.leading === false) {
+            l = u;
+          }
+          var m = t - (u - l);
+          o = this;
+          n = arguments;
+          if (m <= 0 || m > t) {
+            if (s) {
+              clearTimeout(s);
+              s = null;
+            }
+            l = u;
+            r = e.apply(o, n);
+            if (!s) {
+              o = n = null;
+            }
+          } else {
+            if (!s && i.trailing !== false) {
+              s = setTimeout(d, m);
+            }
+            if (!c) {
+              c = setTimeout(d, t);
+            }
+          }
+          return r;
+        };
+      },
+      loadJS: function(e, t) {
+        var i = document.createElement("script"), o = t || function() {};
+        i.type = "text/javascript";
+        i.async = false;
+        if (i.readyState) {
+          i.onreadystatechange = function() {
+            if (i.readyState == "loaded" || i.readyState == "complete") {
+              i.onreadystatechange = null;
+              o();
+            }
+          };
+        } else {
+          i.onload = function() {
+            o();
+          };
+        }
+        i.src = e;
+        document.getElementsByTagName("head")[0].appendChild(i);
+      },
+      includes: function(e, t) {
+        return String(e).indexOf(t) > -1;
+      },
+      getSearchParams: function(e, t) {
+        var i = e.split("?")[1] || "";
+        var o = util.query2Object(i, "&");
+        return o[t] || null;
+      }
+    };
+    function ininYsfSdk() {
+      initSdkStyle();
+      var e = {
+        corpInfo: Number(corpSetting.corpInfo || "0"),
+        winType: Number(corpSetting.dialogStyle || "1"),
+        winMobileType: Number(corpSetting.dialogMobileStyle || "1"),
+        sdkCustom: sdkSetting.theme || 0,
+        hidden: String(remoteSetting.hidden) !== "1" || urlSetting.hidden && urlSetting.hidden !== "0" || urlSetting.hidden === "" ? 1 : 0,
+        preloadIframe: remoteSetting.preloadIframe || 0,
+        appKey: appKey,
+        uid: urlSetting.uid || "",
+        imgSrc: sdkURL,
+        sessionInvite: remoteSetting.sessionInvite || 0
+      };
+      if (urlSetting.corpName && urlSetting.corpInfoUrl && urlSetting.corpCode) {
+        e.profile = JSON.stringify([ {
+          index: 0,
+          key: "corpName",
+          label: "企业名称",
+          value: urlSetting.corpName,
+          href: urlSetting.corpInfoUrl
+        }, {
+          index: 1,
+          key: "corpCode",
+          label: "企业域名",
+          value: urlSetting.corpCode
+        } ]);
+      }
+      ysf.config(e, 1);
+      ysf.init(sdkURL, inviteSetting);
+      if (inviteSetting.switchType !== 0) {
+        ysf.invite(inviteSetting);
+      }
+    }
+    function setConfig(e) {
+      if (e) {
+        sdkSetting = e.sdkSetting || {};
+        inviteSetting = e.inviteSetting || {};
+        corpSetting = e.corpSetting || {};
+        sdkURL = e.sdkURL || "";
+      }
+      window.__YSFWINTYPE__ = Number(corpSetting.dialogStyle || "1");
+      window.__YSFMODILEWINTYPE__ = Number(corpSetting.dialogMobileStyle || "2");
+      window.__YSFTHEMELAYEROUT__ = sdkSetting.layout || 1;
+      window.__YSFBGCOLOR__ = sdkSetting.bgColor || "0";
+      window.__YSFBGTONE__ = sdkSetting.tone || "notone";
+      window.__YSFBGIMG__ = sdkSetting.image || "";
+      var t = function(e) {
+        window.__YSFSDKADR__ = "https://" + e;
+        ysf.ROOT = window.__YSFSDKADR__ || "";
+        ysf.initData();
+      };
+      if (e.cdomain) {
+        t(e.cdomain);
+      } else if (urlSetting.subdomain === "1") {
+        t(e.accessDomain);
+      }
+      ysf.buildProxy();
+      window.__YSFDASWITCH__ = e.analyticSwitch || 0;
+      if (e.isGa === 1) {
+        window.__YSFDAROOT__ = window.__YSFDAROOT__.replace("https://da", "https://dag");
+      }
+      if (e.globalSetting && e.globalSetting.privatisationUrl) {
+        window.__YSFDAROOT__ = "https://da." + e.globalSetting.privatisationUrl + "/webda/da.gif";
+        window.__YSFSDKADR__ = "https://" + e.globalSetting.privatisationUrl;
+      }
+      window.__YSFISGA__ = e.isGa || 0;
+      window.__YSFVISITORRECORD__ = e.userVisitSwitch || 0;
+      window.__YSFISUPINFOTOSERVER__ = e.isUpInfoToServer || 0;
+      window.MIN_LBS = isOnline() ? "https://lbs.chatnos.com/lbs/webconf.jsp?devflag=qyonline" : "https://imtest-gy.netease.im/lbs/webconf.jsp?devflag=qytest";
+      window.inviteSetting = inviteSetting;
+      window.sdkTemplateId = e.sdkTemplateId || 0;
+      window.shuntId = e.shuntId || 0;
+    }
+    function querySetting(e) {
+      var t = {
+        appKey: appKey
+      };
+      each(urlSetting, (function(e, i) {
+        if (i !== null) {
+          t[e] = i;
+        }
+      }));
+      util.ajax({
+        url: window.__YSFSDKADR__ + settingUrl,
+        method: "GET",
+        data: t,
+        success: function(t) {
+          if (t) {
+            remoteSetting = t;
+            setConfig(t);
+            e();
+          }
+        },
+        error: function(e) {
+          console.error(e);
+        }
+      });
+    }
+    function initSdkStyle() {
+      var e = "";
+      var t = "";
+      var i = [ "none", "#F96868", "#F2A654", "#926DDE", "#57C7D4", "#62A8EA", "#46BE8A", "#526069" ];
+      if (sdkSetting.bgColor && sdkSetting.bgColor !== "0") {
+        t = sdkSetting.bgColor;
+      } else {
+        t = i[sdkSetting.tone || 0];
+      }
+      if (sdkSetting.theme != 0) {
+        e = "max-width:300px;max-height:300px;";
+        sdkURL = sdkSetting.image || "";
+        window.__YSFTHEMELAYEROUT__ = 0;
+        if (sdkURL) {
+          sdkURL = sdkURL + "?imageView&thumbnail=300x300";
+        }
+      }
+      if (!sdkSetting.image) {
+        sdkURL = "https://qiyukf.nosdn.127.net/sdk/res/kefu/custom/" + sdkSetting.layout + ".png";
+        if (String(sdkSetting.layout) === "1") {
+          e = "max-width:30px;max-height:120px;";
+        } else {
+          e = "max-width:70px;max-height:70px;";
+        }
+      }
+      ysf.style([ "#YSF-BTN-HOLDER{position: fixed;" + e + "right: 30px; bottom: 24px; cursor: pointer; overflow: visible; filter: alpha(opacity=100);opacity:1;z-index: 9990}", "#YSF-BTN-HOLDER:hover{filter: alpha(opacity=95);opacity:.95}", "#YSF-BTN-HOLDER img{ display: block;overflow: hidden; }", "#YSF-BTN-CIRCLE{display: none;position: absolute;right: -5px;top: -6px;width: auto;min-width: 12px;height: 20px;padding: 0 4px;background-color: #f00;font-size: 12px;line-height: 20px;color: #fff;text-align: center;white-space: nowrap;font-family: sans-serif;border-radius: 10px;z-index:1;}", "#YSF-BTN-BUBBLE{display: none;position: absolute;left: -274px;bottom:-15px;width: 278px;height: 80px;box-sizing: border-box;padding: 14px 22px;filter: alpha(opacity=100);opacity:1;background: url(" + ysf.CDNROOT + "res/img/sdk/bg_floatMsg2x.png" + ")  no-repeat;background:url(" + ysf.CDNROOT + "res/img/sdk/bg_floatMsg.png" + "); background-size: 278px 80px; z-index: 1;}", "#YSF-BTN-HOLDER.layer-6{bottom:0;}", "#YSF-BTN-HOLDER.layer-1 #YSF-BTN-BUBBLE{top:0}", "#YSF-BTN-HOLDER.layer-6 #YSF-BTN-BUBBLE{bottom:-6px;}", "#YSF-BTN-BUBBLE:hover{filter: alpha(opacity=95);opacity:.95}", "#YSF-BTN-CONTENT{height:45px;padding: 0;white-space: normal;word-break: break-all;text-align: left;font-size: 14px;line-height: 1.6;color: #222;overflow: hidden;z-index: 0;}", "#YSF-BTN-ARROW{ display: none; }", "#YSF-BTN-CLOSE{position: absolute; width:15px; height:15px;right: 4px;top: -3px; filter: alpha(opacity=90); opacity:.9; cursor: pointer; background: url(" + ysf.CDNROOT + "res/img/sdk/btn-close.png" + ") no-repeat;z-index: 1}", "#YSF-BTN-CLOSE:hover{filter: alpha(opacity=100); opacity: 1;}", "#YSF-PANEL-CORPINFO.ysf-chat-layeropen{ width: 511px; height: 500px; border-radius: 8px; box-shadow: 0 0 20px 0 rgba(0, 0, 0, .15);}", "#YSF-PANEL-CORPINFO{ position: fixed; bottom: 0px; right: 20px; width: 0; height: 0; z-index: 99999; }", "#YSF-PANEL-INFO.ysf-chat-layeropen{ width: 360px; height: 500px; border-radius: 8px; filter: alpha(opacity=100);opacity:1; box-shadow: 0 0 20px 0 rgba(0, 0, 0, .15);}", "#YSF-PANEL-INFO{ position: fixed; bottom: 0px; right: 20px; width: 0px; height: 0px; filter: alpha(opacity=0);opacity:0;z-index: 99999;}", "#YSF-PANEL-INFO .u-btn{background-color: " + t + ";}", "#YSF-CUSTOM-ENTRY{background-color: #F96868;}", "#YSF-CUSTOM-ENTRY-0{position: relative;width:auto;background-color: " + t + ";box-shadow: 0px 6px 10px 0px rgba(0,0,0,0.25);}", "#YSF-CUSTOM-ENTRY-1{position: relative;width:auto;background-color: " + t + ";border-radius: 14px; box-shadow: 0px 6px 10px 0px rgba(0,0,0,0.25);}", "#YSF-CUSTOM-ENTRY-2{position: relative;width:auto;background-color: " + t + ";border-radius: 8px;box-shadow: 0px 6px 10px 0px rgba(0,0,0,0.25);}", "#YSF-CUSTOM-ENTRY-3{position: relative;width:auto;background-color: " + t + ";border-radius: 50%;box-shadow: 0px 6px 10px 0px rgba(0,0,0,0.25);}", "#YSF-CUSTOM-ENTRY-4{position: relative;width:auto;background-color: " + t + ";border-radius: 50%;box-shadow: 0px 6px 10px 0px rgba(0,0,0,0.25);}", "#YSF-CUSTOM-ENTRY-5{position: relative;width:auto;background-color: " + t + ";border-radius: 8px;box-shadow: 0px 6px 10px 0px rgba(0,0,0,0.25);}", "#YSF-CUSTOM-ENTRY-6{position: relative;width:auto;background-color: " + t + ";border-radius: 8px;box-shadow: 0px 6px 10px 0px rgba(0,0,0,0.25);}", "#YSF-CUSTOM-ENTRY-7{position: relative;width:auto;background-color: " + t + ";border-radius: 50%;box-shadow: 0px 6px 10px 0px rgba(0,0,0,0.25);}", "#YSF-CUSTOM-ENTRY-8{position: relative;width:auto;background-color: " + t + ";border-radius: 8px;box-shadow: 0px 6px 10px 0px rgba(0,0,0,0.25);}", "#YSF-CUSTOM-ENTRY-0 img{max-width: 300px;max-height: 300px;}", "#YSF-CUSTOM-ENTRY-1 img{width:28px;height:auto;}", "#YSF-CUSTOM-ENTRY-2 img{width:58px;height:auto;}", "#YSF-CUSTOM-ENTRY-3 img{width:60px;height:auto;}", "#YSF-CUSTOM-ENTRY-4 img{width:60px;height:auto;}", "#YSF-CUSTOM-ENTRY-5 img{width:60px;height:auto;}", "#YSF-CUSTOM-ENTRY-6 img{width:58px;height:auto;}", "#YSF-CUSTOM-ENTRY-7 img{width:60px;height:auto;}", "#YSF-CUSTOM-ENTRY-8 img{width:60px;height:auto;}", "#YSF-IFRAME-LAYER{ border:0; outline:none; }", ".ysf-online-invite-wrap{z-index:10001;position:fixed;_position:absolute;top:50%;left:50%;}", ".ysf-online-invite{position:relative;top:-50%;left:-50%;cursor:pointer;border-radius: 16px;box-shadow: 0 10px 30px 0 rgba(47,56,111,0.15);}", ".ysf-online-invite img{display:block;width:250px;}", ".ysf-online-invite .ysf-online-invite-img{width:100%;height:100%}", '.ysf-online-invite .text{position:absolute;top:-11px;left:0;right:0;overflow:hidden;margin: 36px 20px 0 67px;line-height:140%;color:#526069;font-size:14px;font-family:"Microsoft YaHei","微软雅黑",tahoma,arial,simsun,"宋体";text-align:left;white-space:normal;word-wrap:break-word;}', '.ysf-online-invite .close{position:absolute;top:12px;right:12px;width:16px;height:16px;background:url("https://ysf.nosdn.127.net/operation/4602027f7e6a0109ac433863d7d0acdf") no-repeat;cursor:pointer;background-size: cover;}', "#YSF-PANEL-MOBILE{ background: rgba(46,47,49,0.7); position: fixed; bottom: 0px; right: 0px; width: 100%; height: 0px; transition-property: height,bottom; transition-duration: 0.3s; transition-timing-function: ease; transition-delay: 0s; z-index: 99999; }", "#YSF-PANEL-MOBILE.ysf-chat-layeropen{ width: 100%; height: 100%; transition-property:height,bottom; transition-duration: 0.3s; transition-timing-function: ease; transition-delay: 0s; }", "#YSF-IFRAME-LAYER.ysf-chat-mobile-layeropen{ height: 90% !important; transition-property: height,bottom; transition-duration: 0.3s; transition-timing-function: ease; transition-delay: 0s; }", "#YSF-IFRAME-LAYER.ysf-chat-mobile-layeropen.ysf-chat-mobile-invite-layer{ height: 33% !important; }", "#YSF-IFRAME-LAYER{ position: absolute; bottom: 0px;left: 0; right: 0px; width: 0px; height: 0px; transition-property: height,bottom; transition-duration: 0.3s; transition-timing-function: ease; transition-delay: 0s; z-index: 9999; }", ".YSF-PANEL-BODY-FIXED{ position: fixed !important; left: 0; right: 0;}", ".YSF-INVITE-LAYER-WRAPPER {cursor: pointer; position: relative; border: 1px solid #eaf0f6; background: #fff;box-shadow: 0 5px 20px rgba(0,0,0,0.1); border-radius: 4px; width: 220px; padding: 16px; box-sizing: border-box; margin-bottom: 12px; background: #FFFFFF;box-shadow: 0 6px 20px 0 rgba(40,53,75,0.17);border-radius: 8px;}", ".YSF-INVITE-LAYER-HEADER {display: flex;align-items: center;justify-content: space-between;margin-bottom: 8px;}", ".YSF-INVITE-LAYER-HEADER-LEFT {display: flex;flex: 1;align-items: center;}", ".YSF-INVITE-LAYER-RICHTEXT { height: 44px; max-width: 168px; word-break: break-all; overflow: hidden; text-overflow: ellipsis; font-size: 14px; color: #333333; line-height: 22px; text-align: left; }", ".YSF-INVITE-LAYER-RICHTEXT p { margin: 0;}", "#YSF-BTN-HOLDER .YSF-INVITE-LAYER-AVATAR { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; }", ".YSF-INVITE-LAYER-KEFU-NAME { font-size: 12px; color: #999999; margin-left: 4px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }", '#YSF-ONLINE-INVITE-LAYER-CLOSE{ width:12px; height:12px; background:url("https://ysf.nosdn.127.net/operation/0e5ee37a71d33e05b74d1a5aa3cdd99a") no-repeat; background-size: cover; cursor:pointer; }', "#YSF-INVITE-LAYER-WRAPPER-ENTRY { position: relative; float: right; }", '.YSF-LAYER-ENTRY-CIRCLE { width: auto; min-width: 12px; height: 20px; padding: 0 4px; border-radius: 10px; color: #FFFFFF; background-color: #f00; font-size: 12px; line-height: 20px; white-space: nowrap; z-index:1; background: url("https://ysf.nosdn.127.net/operation/997228b687d805f7a5d6244865615ec9") no-repeat; background-size: cover; position: absolute; top: 6px; right: -8px; }', ".YSF-INVITE-IMG {background-color: " + t + ";box-shadow: 0px 6px 10px 0px rgba(0,0,0,0.25);float: right;}", ".YSF_INVITE-IMG-0{max-width: 300px; height:auto;}", ".YSF_INVITE-IMG-1{width:28px; height:auto; border-radius: 14px;}", ".YSF_INVITE-IMG-2{width:58px; height:auto; border-radius: 8px;}", ".YSF_INVITE-IMG-3{width:60px; height:auto; border-radius: 50%;}", ".YSF_INVITE-IMG-4{width:60px; height:auto; border-radius: 50%;}", ".YSF_INVITE-IMG-5{width:60px; height:auto; border-radius: 8px;}", ".YSF_INVITE-IMG-6{width:58px; height:auto; border-radius: 8px;}", ".YSF_INVITE-IMG-7{width:60px; height:auto; border-radius: 50%;}", ".YSF_INVITE-IMG-8{width:60px; height:auto; border-radius: 8px;}", "#YSF-BTN-HOLDER .portrait_icon{width: 24px;height: 24px;vertical-align: middle;display: inline-block;}" ].join(" "));
+    }
+    function initSdk() {
+      var e = [ "hidden", "sdkTemplateId", "shuntId", "sessionInvite", "subdomain", "debugger", "uid", "corpName", "corpInfoUrl", "corpCode", "templateId" ];
+      for (var t = 0; t < e.length; t++) {
+        urlSetting[e[t]] = getCurrentScriptParams(e[t]);
+      }
+      if (document.currentScript.src) {
+        var i = document.currentScript.src;
+        if (util.includes(i, ".js&hidden")) {
+          urlSetting.hidden = "1";
+        }
+      }
+      querySetting((function() {
+        ininYsfSdk();
+      }));
+    }
+    window.appKey = appKey = getAppKey();
+    ysfSdk();
+    initSdk();
+    function ysfSdk() {
+      if (!window.localStorage || !window.postMessage) {
+        return "not support service";
+      }
+      window.__YSF_EMOJI__ = {
+        pmap: {
+          emoticon_emoji_01: {
+            tag: "[可爱]",
+            file: "emoji_01.png"
+          },
+          emoticon_emoji_00: {
+            tag: "[大笑]",
+            file: "emoji_00.png"
+          },
+          emoticon_emoji_02: {
+            tag: "[色]",
+            file: "emoji_02.png"
+          },
+          emoticon_emoji_03: {
+            tag: "[嘘]",
+            file: "emoji_03.png"
+          },
+          emoticon_emoji_04: {
+            tag: "[亲]",
+            file: "emoji_04.png"
+          },
+          emoticon_emoji_05: {
+            tag: "[呆]",
+            file: "emoji_05.png"
+          },
+          emoticon_emoji_06: {
+            tag: "[口水]",
+            file: "emoji_06.png"
+          },
+          emoticon_emoji_145: {
+            tag: "[汗]",
+            file: "emoji_145.png"
+          },
+          emoticon_emoji_07: {
+            tag: "[呲牙]",
+            file: "emoji_07.png"
+          },
+          emoticon_emoji_08: {
+            tag: "[鬼脸]",
+            file: "emoji_08.png"
+          },
+          emoticon_emoji_09: {
+            tag: "[害羞]",
+            file: "emoji_09.png"
+          },
+          emoticon_emoji_10: {
+            tag: "[偷笑]",
+            file: "emoji_10.png"
+          },
+          emoticon_emoji_11: {
+            tag: "[调皮]",
+            file: "emoji_11.png"
+          },
+          emoticon_emoji_12: {
+            tag: "[可怜]",
+            file: "emoji_12.png"
+          },
+          emoticon_emoji_13: {
+            tag: "[敲]",
+            file: "emoji_13.png"
+          },
+          emoticon_emoji_14: {
+            tag: "[惊讶]",
+            file: "emoji_14.png"
+          },
+          emoticon_emoji_15: {
+            tag: "[流感]",
+            file: "emoji_15.png"
+          },
+          emoticon_emoji_16: {
+            tag: "[委屈]",
+            file: "emoji_16.png"
+          },
+          emoticon_emoji_17: {
+            tag: "[流泪]",
+            file: "emoji_17.png"
+          },
+          emoticon_emoji_18: {
+            tag: "[嚎哭]",
+            file: "emoji_18.png"
+          },
+          emoticon_emoji_19: {
+            tag: "[惊恐]",
+            file: "emoji_19.png"
+          },
+          emoticon_emoji_20: {
+            tag: "[怒]",
+            file: "emoji_20.png"
+          },
+          emoticon_emoji_21: {
+            tag: "[酷]",
+            file: "emoji_21.png"
+          },
+          emoticon_emoji_22: {
+            tag: "[不说]",
+            file: "emoji_22.png"
+          },
+          emoticon_emoji_23: {
+            tag: "[鄙视]",
+            file: "emoji_23.png"
+          },
+          emoticon_emoji_24: {
+            tag: "[阿弥陀佛]",
+            file: "emoji_24.png"
+          },
+          emoticon_emoji_25: {
+            tag: "[奸笑]",
+            file: "emoji_25.png"
+          },
+          emoticon_emoji_26: {
+            tag: "[睡着]",
+            file: "emoji_26.png"
+          },
+          emoticon_emoji_27: {
+            tag: "[口罩]",
+            file: "emoji_27.png"
+          },
+          emoticon_emoji_28: {
+            tag: "[生气]",
+            file: "emoji_28.png"
+          },
+          emoticon_emoji_29: {
+            tag: "[抠鼻孔]",
+            file: "emoji_29.png"
+          },
+          emoticon_emoji_30: {
+            tag: "[疑问]",
+            file: "emoji_30.png"
+          },
+          emoticon_emoji_31: {
+            tag: "[怒骂]",
+            file: "emoji_31.png"
+          },
+          emoticon_emoji_32: {
+            tag: "[晕]",
+            file: "emoji_32.png"
+          },
+          emoticon_emoji_33: {
+            tag: "[呕吐]",
+            file: "emoji_33.png"
+          },
+          emoticon_emoji_160: {
+            tag: "[拜一拜]",
+            file: "emoji_160.png"
+          },
+          emoticon_emoji_161: {
+            tag: "[惊喜]",
+            file: "emoji_161.png"
+          },
+          emoticon_emoji_162: {
+            tag: "[流汗]",
+            file: "emoji_162.png"
+          },
+          emoticon_emoji_163: {
+            tag: "[卖萌]",
+            file: "emoji_163.png"
+          },
+          emoticon_emoji_164: {
+            tag: "[默契眨眼]",
+            file: "emoji_164.png"
+          },
+          emoticon_emoji_165: {
+            tag: "[烧香拜佛]",
+            file: "emoji_165.png"
+          },
+          emoticon_emoji_166: {
+            tag: "[晚安]",
+            file: "emoji_166.png"
+          },
+          emoticon_emoji_34: {
+            tag: "[强]",
+            file: "emoji_34.png"
+          },
+          emoticon_emoji_35: {
+            tag: "[弱]",
+            file: "emoji_35.png"
+          },
+          emoticon_emoji_36: {
+            tag: "[OK]",
+            file: "emoji_36.png"
+          },
+          emoticon_emoji_37: {
+            tag: "[拳头]",
+            file: "emoji_37.png"
+          },
+          emoticon_emoji_38: {
+            tag: "[胜利]",
+            file: "emoji_38.png"
+          },
+          emoticon_emoji_39: {
+            tag: "[鼓掌]",
+            file: "emoji_39.png"
+          },
+          emoticon_emoji_200: {
+            tag: "[握手]",
+            file: "emoji_200.png"
+          },
+          emoticon_emoji_40: {
+            tag: "[发怒]",
+            file: "emoji_40.png"
+          },
+          emoticon_emoji_41: {
+            tag: "[骷髅]",
+            file: "emoji_41.png"
+          },
+          emoticon_emoji_42: {
+            tag: "[便便]",
+            file: "emoji_42.png"
+          },
+          emoticon_emoji_43: {
+            tag: "[火]",
+            file: "emoji_43.png"
+          },
+          emoticon_emoji_44: {
+            tag: "[溜]",
+            file: "emoji_44.png"
+          },
+          emoticon_emoji_45: {
+            tag: "[爱心]",
+            file: "emoji_45.png"
+          },
+          emoticon_emoji_46: {
+            tag: "[心碎]",
+            file: "emoji_46.png"
+          },
+          emoticon_emoji_47: {
+            tag: "[钟情]",
+            file: "emoji_47.png"
+          },
+          emoticon_emoji_48: {
+            tag: "[唇]",
+            file: "emoji_48.png"
+          },
+          emoticon_emoji_49: {
+            tag: "[戒指]",
+            file: "emoji_49.png"
+          },
+          emoticon_emoji_50: {
+            tag: "[钻石]",
+            file: "emoji_50.png"
+          },
+          emoticon_emoji_51: {
+            tag: "[太阳]",
+            file: "emoji_51.png"
+          },
+          emoticon_emoji_52: {
+            tag: "[有时晴]",
+            file: "emoji_52.png"
+          },
+          emoticon_emoji_53: {
+            tag: "[多云]",
+            file: "emoji_53.png"
+          },
+          emoticon_emoji_54: {
+            tag: "[雷]",
+            file: "emoji_54.png"
+          },
+          emoticon_emoji_55: {
+            tag: "[雨]",
+            file: "emoji_55.png"
+          },
+          emoticon_emoji_56: {
+            tag: "[雪花]",
+            file: "emoji_56.png"
+          },
+          emoticon_emoji_57: {
+            tag: "[爱人]",
+            file: "emoji_57.png"
+          },
+          emoticon_emoji_58: {
+            tag: "[帽子]",
+            file: "emoji_58.png"
+          },
+          emoticon_emoji_59: {
+            tag: "[皇冠]",
+            file: "emoji_59.png"
+          },
+          emoticon_emoji_60: {
+            tag: "[篮球]",
+            file: "emoji_60.png"
+          },
+          emoticon_emoji_61: {
+            tag: "[足球]",
+            file: "emoji_61.png"
+          },
+          emoticon_emoji_62: {
+            tag: "[垒球]",
+            file: "emoji_62.png"
+          },
+          emoticon_emoji_63: {
+            tag: "[网球]",
+            file: "emoji_63.png"
+          },
+          emoticon_emoji_64: {
+            tag: "[台球]",
+            file: "emoji_64.png"
+          },
+          emoticon_emoji_65: {
+            tag: "[咖啡]",
+            file: "emoji_65.png"
+          },
+          emoticon_emoji_66: {
+            tag: "[啤酒]",
+            file: "emoji_66.png"
+          },
+          emoticon_emoji_67: {
+            tag: "[干杯]",
+            file: "emoji_67.png"
+          },
+          emoticon_emoji_68: {
+            tag: "[柠檬汁]",
+            file: "emoji_68.png"
+          },
+          emoticon_emoji_69: {
+            tag: "[餐具]",
+            file: "emoji_69.png"
+          },
+          emoticon_emoji_70: {
+            tag: "[汉堡]",
+            file: "emoji_70.png"
+          },
+          emoticon_emoji_71: {
+            tag: "[鸡腿]",
+            file: "emoji_71.png"
+          },
+          emoticon_emoji_72: {
+            tag: "[面条]",
+            file: "emoji_72.png"
+          },
+          emoticon_emoji_73: {
+            tag: "[冰淇淋]",
+            file: "emoji_73.png"
+          },
+          emoticon_emoji_74: {
+            tag: "[沙冰]",
+            file: "emoji_74.png"
+          },
+          emoticon_emoji_75: {
+            tag: "[生日蛋糕]",
+            file: "emoji_75.png"
+          },
+          emoticon_emoji_76: {
+            tag: "[蛋糕]",
+            file: "emoji_76.png"
+          },
+          emoticon_emoji_77: {
+            tag: "[糖果]",
+            file: "emoji_77.png"
+          },
+          emoticon_emoji_78: {
+            tag: "[葡萄]",
+            file: "emoji_78.png"
+          },
+          emoticon_emoji_79: {
+            tag: "[西瓜]",
+            file: "emoji_79.png"
+          },
+          emoticon_emoji_80: {
+            tag: "[光碟]",
+            file: "emoji_80.png"
+          },
+          emoticon_emoji_81: {
+            tag: "[手机]",
+            file: "emoji_81.png"
+          },
+          emoticon_emoji_82: {
+            tag: "[电话]",
+            file: "emoji_82.png"
+          },
+          emoticon_emoji_83: {
+            tag: "[电视]",
+            file: "emoji_83.png"
+          },
+          emoticon_emoji_84: {
+            tag: "[声音开启]",
+            file: "emoji_84.png"
+          },
+          emoticon_emoji_85: {
+            tag: "[声音关闭]",
+            file: "emoji_85.png"
+          },
+          emoticon_emoji_86: {
+            tag: "[铃铛]",
+            file: "emoji_86.png"
+          },
+          emoticon_emoji_87: {
+            tag: "[锁头]",
+            file: "emoji_87.png"
+          },
+          emoticon_emoji_88: {
+            tag: "[放大镜]",
+            file: "emoji_88.png"
+          },
+          emoticon_emoji_89: {
+            tag: "[灯泡]",
+            file: "emoji_89.png"
+          },
+          emoticon_emoji_90: {
+            tag: "[锤头]",
+            file: "emoji_90.png"
+          },
+          emoticon_emoji_91: {
+            tag: "[烟]",
+            file: "emoji_91.png"
+          },
+          emoticon_emoji_92: {
+            tag: "[炸弹]",
+            file: "emoji_92.png"
+          },
+          emoticon_emoji_93: {
+            tag: "[枪]",
+            file: "emoji_93.png"
+          },
+          emoticon_emoji_94: {
+            tag: "[刀]",
+            file: "emoji_94.png"
+          },
+          emoticon_emoji_95: {
+            tag: "[药]",
+            file: "emoji_95.png"
+          },
+          emoticon_emoji_96: {
+            tag: "[打针]",
+            file: "emoji_96.png"
+          },
+          emoticon_emoji_97: {
+            tag: "[钱袋]",
+            file: "emoji_97.png"
+          },
+          emoticon_emoji_98: {
+            tag: "[钞票]",
+            file: "emoji_98.png"
+          },
+          emoticon_emoji_99: {
+            tag: "[银行卡]",
+            file: "emoji_99.png"
+          },
+          emoticon_emoji_100: {
+            tag: "[手柄]",
+            file: "emoji_100.png"
+          },
+          emoticon_emoji_101: {
+            tag: "[麻将]",
+            file: "emoji_101.png"
+          },
+          emoticon_emoji_102: {
+            tag: "[调色板]",
+            file: "emoji_102.png"
+          },
+          emoticon_emoji_103: {
+            tag: "[电影]",
+            file: "emoji_103.png"
+          },
+          emoticon_emoji_104: {
+            tag: "[麦克风]",
+            file: "emoji_104.png"
+          },
+          emoticon_emoji_105: {
+            tag: "[耳机]",
+            file: "emoji_105.png"
+          },
+          emoticon_emoji_106: {
+            tag: "[音乐]",
+            file: "emoji_106.png"
+          },
+          emoticon_emoji_107: {
+            tag: "[吉他]",
+            file: "emoji_107.png"
+          },
+          emoticon_emoji_108: {
+            tag: "[火箭]",
+            file: "emoji_108.png"
+          },
+          emoticon_emoji_109: {
+            tag: "[飞机]",
+            file: "emoji_109.png"
+          },
+          emoticon_emoji_110: {
+            tag: "[火车]",
+            file: "emoji_110.png"
+          },
+          emoticon_emoji_111: {
+            tag: "[公交]",
+            file: "emoji_111.png"
+          },
+          emoticon_emoji_112: {
+            tag: "[轿车]",
+            file: "emoji_112.png"
+          },
+          emoticon_emoji_113: {
+            tag: "[出租车]",
+            file: "emoji_113.png"
+          },
+          emoticon_emoji_114: {
+            tag: "[警车]",
+            file: "emoji_114.png"
+          },
+          emoticon_emoji_115: {
+            tag: "[自行车]",
+            file: "emoji_115.png"
+          },
+          emoticon_emoji_116: {
+            tag: "[撇嘴]",
+            file: "new_emoji_01.png"
+          },
+          emoticon_emoji_117: {
+            tag: "[难过]",
+            file: "1f641.png"
+          },
+          emoticon_emoji_118: {
+            tag: "[冷汗]",
+            file: "1f628.png"
+          },
+          emoticon_emoji_119: {
+            tag: "[抓狂]",
+            file: "1f629.png"
+          },
+          emoticon_emoji_120: {
+            tag: "[傲慢]",
+            file: "1f615.png"
+          },
+          emoticon_emoji_121: {
+            tag: "[困]",
+            file: "1f62a.png"
+          },
+          emoticon_emoji_122: {
+            tag: "[疯了]",
+            file: "1f616.png"
+          },
+          emoticon_emoji_123: {
+            tag: "[奋斗]",
+            file: "1f4aa-1f3fc.png"
+          },
+          emoticon_emoji_124: {
+            tag: "[白眼]",
+            file: "new_emoji_02.png"
+          },
+          emoticon_emoji_125: {
+            tag: "[衰]",
+            file: "new_emoji_05.png"
+          },
+          emoticon_emoji_126: {
+            tag: "[再见]",
+            file: "new_emoji_06.png"
+          },
+          emoticon_emoji_127: {
+            tag: "[哼哼]",
+            file: "1f63e.png"
+          },
+          emoticon_emoji_128: {
+            tag: "[阴险]",
+            file: "1f608.png"
+          },
+          emoticon_emoji_129: {
+            tag: "[饥饿]",
+            file: "new_emoji_03.png"
+          },
+          emoticon_emoji_130: {
+            tag: "[乒乓]",
+            file: "new_emoji_23.png"
+          },
+          emoticon_emoji_131: {
+            tag: "[猪头]",
+            file: "1f437.png"
+          },
+          emoticon_emoji_132: {
+            tag: "[玫瑰]",
+            file: "new_emoji_25.png"
+          },
+          emoticon_emoji_133: {
+            tag: "[凋谢]",
+            file: "new_emoji_24.png"
+          },
+          emoticon_emoji_134: {
+            tag: "[瓢虫]",
+            file: "1f41e.png"
+          },
+          emoticon_emoji_135: {
+            tag: "[月亮]",
+            file: "new_emoji_30.png"
+          },
+          emoticon_emoji_136: {
+            tag: "[礼物]",
+            file: "new_emoji_28.png"
+          },
+          emoticon_emoji_137: {
+            tag: "[拥抱]",
+            file: "new_emoji_08.png"
+          },
+          emoticon_emoji_138: {
+            tag: "[抱拳]",
+            file: "new_emoji_18.png"
+          },
+          emoticon_emoji_139: {
+            tag: "[勾引]",
+            file: "new_emoji_19.png"
+          },
+          emoticon_emoji_140: {
+            tag: "[差劲]",
+            file: "new_emoji_20.png"
+          },
+          emoticon_emoji_141: {
+            tag: "[爱你]",
+            file: "new_emoji_21.png"
+          },
+          emoticon_emoji_142: {
+            tag: "[NO]",
+            file: "new_emoji_22.png"
+          },
+          emoticon_emoji_143: {
+            tag: "[飞吻]",
+            file: "new_emoji_10.png"
+          },
+          emoticon_emoji_144: {
+            tag: "[微笑]",
+            file: "1f642.png"
+          },
+          emoticon_emoji_146: {
+            tag: "[吐舌头]",
+            file: "1f61d.png"
+          },
+          emoticon_emoji_147: {
+            tag: "[忧郁]",
+            file: "new_emoji_11.png"
+          },
+          emoticon_emoji_148: {
+            tag: "[尴尬]",
+            file: "1f630.png"
+          },
+          emoticon_emoji_149: {
+            tag: "[舒适]",
+            file: "1f60c.png"
+          },
+          emoticon_emoji_150: {
+            tag: "[不悦]",
+            file: "1f612.png"
+          },
+          emoticon_emoji_151: {
+            tag: "[幽灵]",
+            file: "1f47b.png"
+          },
+          emoticon_emoji_152: {
+            tag: "[礼盒]",
+            file: "1f49d.png"
+          },
+          emoticon_emoji_153: {
+            tag: "[拜托]",
+            file: "1f64f-1f3fc.png"
+          },
+          emoticon_emoji_154: {
+            tag: "[气球]",
+            file: "1f388.png"
+          },
+          emoticon_emoji_155: {
+            tag: "[拍掌]",
+            file: "new_emoji_09.png"
+          },
+          emoticon_emoji_156: {
+            tag: "[泪中带笑]",
+            file: "1f602.png"
+          },
+          emoticon_emoji_157: {
+            tag: "[糗大了]",
+            file: "new_emoji_07.png"
+          }
+        }
+      };
+      var e = {
+        seq: 1,
+        task: {},
+        getSeq: function() {
+          return e.seq++;
+        },
+        addTask: function(t, i, o) {
+          o = o || 5e3;
+          var n = e.getSeq();
+          e.task[n] = {
+            resolve: t,
+            reject: i
+          };
+          setTimeout((function() {
+            if (e.task[n]) {
+              e.task[n].reject({
+                code: -1,
+                msg: "请求超时"
+              });
+              delete e.task[n];
+            }
+          }), o);
+          return n;
+        },
+        fireSeqCallback: function(t) {
+          var i = t.seq;
+          if (e.task[i]) {
+            if (t.code === 200) {
+              e.task[i].resolve(t);
+            } else {
+              e.task[i].reject(t);
+            }
+            delete e.task[i];
+          }
+        }
+      };
+      var t = true;
+      var i = {};
+      var o = {
+        appKey: appKey || window.appKey || ""
+      };
+      var n = [];
+      var r;
+      var a = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXTZabcdefghiklmnopqrstuvwxyz";
+      var s = true;
+      var c = false;
+      var l;
+      var f = 5e3;
+      var d = 0;
+      var u = [];
+      var m;
+      var p = 5e3;
+      var g = false;
+      var y = [];
+      var _ = [];
+      var h = false;
+      var v = false;
+      var S = false;
+      var w = false;
+      var I;
+      var E = 0;
+      if (window.ysf && window.ysf.a) {
+        _ = window.ysf.a;
+      }
+      if (window.ysf) {
+        var T = window.ysf.RESROOT;
+      }
+      window.ysf = function() {
+        try {
+          var e = arguments[0], t = Array.prototype.slice.call(arguments, 1);
+          return fe(e, t);
+        } catch (e) {}
+      };
+      ysf.ROOT = window.__YSFSDKADR__ || "";
+      ysf.RESROOT = T;
+      var b = function(e) {
+        if (!!e) {
+          return "ysf-" + e;
+        }
+        var t = [];
+        for (var i = 0, o; i < 20; ++i) {
+          o = Math.floor(Math.random() * a.length);
+          t.push(a.charAt(o));
+        }
+        return t.join("").toLowerCase();
+      };
+      var x = function(e) {
+        e = e || 10;
+        var t = [];
+        for (var i = 0, o; i < e; ++i) {
+          o = Math.floor(Math.random() * a.length);
+          t.push(a.charAt(o));
+        }
+        return (new Date).getTime() + t.join("");
+      };
+      var N = function() {
+        var e;
+        if (/YSF_UID\s*=\s*(.*?)(?=;|$)/i.test(document.cookie)) {
+          e = RegExp.$1;
+        }
+        if (!!e) {
+          localStorage.setItem("YSF_UID", e);
+        }
+        var e;
+        if (/YSF_LAST\s*=\s*(.*?)(?=;|$)/i.test(document.cookie)) {
+          e = RegExp.$1;
+        }
+        if (!!e) {
+          localStorage.setItem("YSF_LAST", e);
+        }
+        var t = new Date(1990, 11, 30).toGMTString();
+        document.cookie = "YSF_UID=;path=/;expires=" + t;
+        document.cookie = "YSF_LAST=;path=/;expires=" + t;
+      };
+      var j = {
+        ack: function(e) {
+          o.timestamp = parseInt(e, 10);
+          if (!!o.onackdone) {
+            o.onackdone();
+            delete o.onackdone;
+          }
+        },
+        rdy: function(e) {
+          setTimeout((function() {
+            k({
+              local: 1
+            });
+          }), 100);
+        }
+      };
+      var F = function() {
+        var e = document.createElement("div"), t = e.style, i = {
+          top: 0,
+          left: 0,
+          visibility: "hidden",
+          position: "absolute",
+          width: "1px",
+          height: "1px"
+        };
+        each(i, (function(e, i) {
+          t[e] = i;
+        }));
+        document.body.appendChild(e);
+        return e;
+      };
+      var C = function(e) {
+        each(e, (function(e, t) {
+          o[e] = t;
+        }));
+      };
+      var A = function(e) {
+        e = e || "";
+        var t = Y(), i = R(), n = O();
+        if (!t || e == "" && i != "") {
+          t = e || t || b(e);
+          K("synckey:" + t);
+        }
+        o.device = t;
+        o.uuid = n || b();
+        localStorage.setItem("YSF-" + o["appKey"].toUpperCase() + "-UID", e || t);
+        localStorage.setItem("YSF-" + o["appKey"].toUpperCase() + "-LAST", e || "");
+        localStorage.setItem("YSF-" + o["appKey"].toUpperCase() + "-UUID", o.uuid);
+      };
+      var Y = function() {
+        return localStorage.getItem("YSF-" + o["appKey"].toUpperCase() + "-UID") || "";
+      };
+      var O = function() {
+        return localStorage.getItem("YSF-" + o["appKey"].toUpperCase() + "-UUID");
+      };
+      var R = function() {
+        return localStorage.getItem("YSF-" + o["appKey"].toUpperCase() + "-LAST") || "";
+      };
+      var L = function() {
+        o.device = b();
+        localStorage.setItem("YSF-" + o["appKey"].toUpperCase() + "-UID", o.device);
+        K("synckey:" + o.device);
+      };
+      var P = function(e, t) {
+        chatProxy.contentWindow.postMessage("" + e + ":" + JSON.stringify(t), "*");
+      };
+      var M = function(t) {
+        return new PromisePolyfill((function(i, o) {
+          var n = e.addTask(i, o);
+          t.seq = n;
+          if (chatProxy) {
+            chatProxy.contentWindow.postMessage(t, "*");
+          }
+          if (window.windowurl) {
+            window.windowurl.postMessage(t, "*");
+          }
+        }));
+      };
+      var k = function(e) {
+        K("KEY:" + o.appKey || 0);
+        var t = {
+          title: document.title || ""
+        };
+        var i = function(e, t) {
+          var i = false;
+          e.forEach((function(e) {
+            if (e.key == t) {
+              i = true;
+            }
+          }));
+          return i;
+        };
+        each({
+          uid: "",
+          reallyUid: "",
+          name: "",
+          email: "",
+          mobile: "",
+          avatar: "",
+          profile: "data",
+          bid: "",
+          level: "",
+          authToken: ""
+        }, (function(e, i) {
+          var n = o[i] || o[e];
+          if (n) {
+            t[e] = n;
+          }
+        }));
+        each({
+          avatar: local.AVATAR || "头像"
+        }, (function(e, o) {
+          try {
+            if (!t[e]) {
+              return;
+            }
+            var n = JSON.parse(t["profile"] || "[]"), r = n.length;
+            if (!i(n, e)) {
+              n.push({
+                key: e,
+                value: t[e],
+                index: r,
+                label: o
+              });
+              t["profile"] = JSON.stringify(n);
+            }
+          } catch (t) {
+            util.consoleError("parse profile error: [crm]" + e, t);
+          }
+        }));
+        t.referrer = o.referrer || location.href;
+        t.title = o.title || "";
+        t.landPage = localStorage.getItem("DA-LANDPAGE") || "";
+        t.landPageTitle = localStorage.getItem("DA-LANDPAGE-TITLE") || "";
+        t.landPageReferrer = localStorage.getItem("DA-LANDPAGE-REFERRER") || "";
+        t.sessionInfo = o.sessionInfo || "";
+        t.deviceId = o.uid || o.device;
+        t.channelExtendInfo = o.channelExtendInfo || "";
+        var n = ysf.checkBaiduSelfBuild();
+        if (n && o.baiduUcid) {
+          t.baiduXstInfo = n;
+          t.baiduUcid = o.baiduUcid;
+          t.baiduSelfBuildSiteId = o.baiduSelfBuildSiteId;
+        }
+        K("USR:" + serialize(t));
+        var r = navigator.userAgent;
+        if (e && e.bid || o.bid) {
+          ae(e && e.bid || o.bid, B.bind(this, e, t));
+        } else {
+          B(e, t);
+        }
+      };
+      var B = function(e, t) {
+        if (e.upToServer && (util.isIOSorSafari() || util.isFirefox() || !util.isFrameModule()) || window.__YSFISUPINFOTOSERVER__) {
+          var i = [ {
+            key: "userInfo",
+            value: JSON.stringify(t)
+          } ];
+          if (e.local === 1) {
+            setTimeout((function() {
+              if (o.uid) {
+                return;
+              }
+              ee(i, e.success, e.error, e.local);
+            }), 200);
+          } else {
+            ee(i, e.success, e.error, e.local);
+          }
+        } else {
+          var i = [ {
+            key: "userInfo",
+            value: JSON.stringify(t)
+          } ];
+          if (e && e.manualRequired) {
+            ee(i, e.success, e.error, e.local);
+          }
+          if (util.isFunction(e.success)) {
+            e.success();
+          }
+        }
+      };
+      var U = function(e) {
+        K("PRODUCT:" + serialize(e.data, true));
+        if (util.isIOSorSafari() || window.__YSFISUPINFOTOSERVER__ || util.isFirefox() || !util.isFrameModule()) {
+          ee([ {
+            key: "orderInfo",
+            value: JSON.stringify(e.data)
+          } ], e.success, e.error);
+        } else {
+          if (util.isFunction(e.success)) {
+            e.success();
+          }
+        }
+      };
+      var D = function(e) {
+        K(JSON.stringify({
+          data: e.data,
+          appkey: o.appKey,
+          type: "cardMessage"
+        }));
+        if (util.isIOSorSafari() || window.__YSFISUPINFOTOSERVER__ || util.isFirefox() || !util.isFrameModule()) {
+          ee([ {
+            key: "cardInfo",
+            value: JSON.stringify(e.data)
+          } ], e.success, e.error);
+        } else {
+          if (util.isFunction(e.success)) {
+            e.success();
+          }
+        }
+      };
+      var V = function(e) {
+        K(JSON.stringify({
+          data: e.data,
+          appkey: o.appKey,
+          type: "customMessage"
+        }));
+        if (util.isIOSorSafari() || window.__YSFISUPINFOTOSERVER__ || util.isFirefox() || !util.isFrameModule()) {
+          ee([ {
+            key: "customMessage",
+            value: JSON.stringify(e.data)
+          } ], e.success, e.error);
+        } else {
+          if (util.isFunction(e.success)) {
+            e.success();
+          }
+        }
+      };
+      var H = function() {
+        if (!window.__YSFDASWITCH__) {
+          return;
+        }
+        var e = {
+          ak: o.appKey,
+          dv: Y(),
+          si: "",
+          su: encodeURIComponent(document.referrer),
+          cup: encodeURIComponent(location.href),
+          cy: "",
+          lp: localStorage.getItem("DA-LANDPAGE") || "",
+          tm: (new Date).getTime()
+        };
+        K("WEBANALYTICS:" + serialize(e));
+        if (util.isIOSorSafari() || window.__YSFISUPINFOTOSERVER__ || util.isFirefox() || !util.isFrameModule()) {
+          ee([ {
+            key: "analyticInfo",
+            value: JSON.stringify(e)
+          } ]);
+        }
+      };
+      var K = function(e) {
+        try {
+          proxy.contentWindow.postMessage(e, "*");
+        } catch (e) {
+          util.consoleError("proxy.contentWindow.postMessage---error");
+        }
+      };
+      var q = function() {
+        var e = null;
+        return function(e, t) {
+          setTimeout((function() {
+            var i = ("YSFMSG-" + o["appKey"] + "-" + e.id).toUpperCase();
+            if (window.localStorage.getItem(i) == null) {
+              window.localStorage.setItem(i, 1);
+              t(true);
+            }
+            t(false);
+          }), o["dvcTimer"] * 100);
+        };
+      }();
+      var G = function(t) {
+        if (t.origin != ysf.ROOT && ysf.ROOT != "") {
+          return;
+        }
+        var i = [];
+        if (typeof t.data === "string") {
+          i = t.data.split(":");
+        }
+        var o = i.shift();
+        if (o == "pkg") {
+          W(JSON.parse(i.join(":")));
+          return;
+        }
+        var n = j[(o || "").toLowerCase()];
+        if (!!n) {
+          n(i.join(":"));
+        }
+        if (typeof t.data === "object") {
+          if (t.data.seq) {
+            e.fireSeqCallback(t.data);
+          }
+        }
+      };
+      var W = function(e) {
+        var t = {
+          notify: function(e) {
+            var t = "YSF-" + Y() + "-MSGNUMBERS";
+            q(e, (function(i) {
+              var n = Number(window.localStorage.getItem(t) || 0), r = i ? ++n : n;
+              o["notifyContent"] = e;
+              o["notifyNumber"] = r;
+              if (i) {
+                ysf._unread(ysf.getUnreadMsg());
+              }
+              ysf.NotifyMsgAndBubble({
+                category: "notifyCircle",
+                data: {
+                  circleNum: r,
+                  notifyCnt: e.content,
+                  type: e.type
+                }
+              });
+            }));
+          },
+          winfocus: function(e) {
+            util.notification(e);
+          },
+          closeIframe: function(e) {
+            var t = document.getElementById("YSF-PANEL-CORPINFO") || document.getElementById("YSF-PANEL-INFO") || document.getElementById("YSF-PANEL-MOBILE"), i = document.getElementById("YSF-BTN-HOLDER"), n = document.getElementById("YSF-IFRAME-LAYER");
+            t.className = "ysf-chat-layer";
+            ysf.checkOpenLayerSize(t, true);
+            if (util.isMobilePlatform() && n) {
+              n.className = "";
+            }
+            if (util.isMobilePlatform() && t) {
+              document.body.classList.remove("YSF-PANEL-BODY-FIXED");
+              document.body.scrollTop = E;
+            }
+            t.setAttribute("data-switch", 0);
+            if (!util.isMobilePlatform() && t && ysf.inviteLayer.isInviteLayerShow()) {
+              ysf.inviteLayer.resetLayer();
+            }
+            if (e.closeType) {
+              o["dvcswitch"] == 1;
+              s = true;
+            }
+            try {
+              P("status", {
+                layerOpen: 0
+              });
+            } catch (e) {}
+            if (o["hidden"] == 0) {
+              i.style.display = "block";
+            }
+          },
+          toggleLabel: function() {
+            o.winType = 3;
+            Q();
+            k({
+              manualRequired: true
+            });
+            ysf.open(I);
+            W({
+              category: "closeIframe"
+            });
+            o.winType = 1;
+            Q();
+          },
+          leaveOk: function(e) {
+            delete ysf.openInline.loadStatus;
+            if (util.resetTimer) {
+              clearTimeout(util.resetTimer);
+            }
+            util.resetTimer = setTimeout((function() {
+              z();
+            }), 1e3);
+            var t = document.getElementById("YSF-PANEL-CORPINFO") || document.getElementById("YSF-PANEL-INFO") || document.getElementById("YSF-PANEL-MOBILE");
+            if (util.isMobilePlatform() && t) {
+              document.body.classList.remove("YSF-PANEL-BODY-FIXED");
+              document.body.scrollTop = E;
+            }
+          },
+          pushMsg: function(e) {
+            if (e.data.sdkAppend) {
+              d = d + 1;
+              u.push(e.data.msgSessionId);
+              ysf.NotifyMsgAndBubble({
+                category: "notifyCircle",
+                data: {
+                  circleNum: d,
+                  notifyCnt: e.data.content,
+                  type: "text"
+                }
+              });
+            }
+          },
+          inputblur: function(e) {
+            if (util.isMobilePlatform()) {
+              document.body.scrollIntoView(false);
+              var t = document.documentElement.scrollTop || document.body.scrollTop;
+              window.scrollTo(0, Math.max(t - 1));
+            }
+          },
+          inputonfocus: function(e) {
+            var t = navigator.userAgent.toLowerCase();
+            var i = t.match(/cpu iphone os (.*?) like mac os/);
+            if (i) {
+              if (parseInt(i[1].replace(/_/g, ".")) == 11) {
+                return;
+              }
+            }
+            document.body.scrollTop = document.body.scrollHeight + 100;
+          },
+          chatProxyBuild: function(e) {
+            S = true;
+            if (ysf.openInline.loadStatus == "loaded" && !w && (util.isEdge() || util.isIe())) {
+              w = true;
+              var t = r && r.getAttribute("data-switch");
+              if (t == "1" || o["dvcswitch"] == 1) {
+                P("doconnect", {
+                  doconnect: 1
+                });
+              }
+            }
+          },
+          inviteModalClick: function() {
+            if (util.isMobilePlatform()) {
+              var e = "ysf-chat-mobile-invite-layer";
+              var t = document.querySelector("." + e);
+              if (t) {
+                t.classList.remove(e);
+                ysf.inviteLayer.inviteLayerHide();
+              }
+            }
+          }
+        };
+        var i = t[e.category];
+        if (!!i) {
+          i(e);
+        }
+      };
+      var z = function() {
+        var e = document.getElementById("YSF-PANEL-CORPINFO") || document.getElementById("YSF-PANEL-INFO") || document.getElementById("YSF-PANEL-MOBILE"), t = document.getElementById("YSF-BTN-HOLDER");
+        document.body.removeChild(e);
+        document.body.removeChild(t);
+        ysf.init(o["imgSrc"]);
+        s = true;
+      };
+      var J = function() {
+        if (!!proxy) {
+          return;
+        }
+        if (!!window.addEventListener) {
+          window.addEventListener("message", G, !1);
+        } else {
+          window.attachEvent("onmessage", G);
+        }
+        proxy = F();
+        proxy.innerHTML = '<iframe style="height:0px; width:0px;" src="' + ysf.ROOT + "/webapi/sdkres/delegate.html?" + +new Date + '"></iframe>';
+        proxy = proxy.getElementsByTagName("IFRAME")[0];
+        proxy.domain = document.domain;
+        util.addLoadEventForProxy((function() {
+          g = true;
+          H();
+          if (!util.isMobilePlatform()) {}
+          if (window.appKey) {
+            ysf.analytics(window.__YSFDASWITCH__);
+          }
+          if (util.isFrameModule()) {
+            if (h && !v) {
+              v = true;
+              for (var e = 0; e < y.length; e++) {
+                var t = y[e], i = t.func, o = t.arg;
+                i.apply(null, o);
+              }
+            }
+          } else {
+            for (var e = 0; e < y.length; e++) {
+              var t = y[e], i = t.func, o = t.arg;
+              i.apply(null, o);
+            }
+          }
+        }));
+      };
+      var X = function(e) {
+        var t = o.appKey, i = Y(), n = encodeURIComponent(location.href), r = (new Date).getTime(), a = encodeURIComponent(document.title), s = 1;
+        var c = function() {
+          try {
+            r = (new Date).getTime();
+            var e = window.__YSFDAROOT__ + "?ak=" + t + "&dv=" + i + "&cup=" + n + "&tm=" + r + "&ct=" + a + "&lt=" + s + "&u=" + window.ysf.PAGEID;
+            $(e);
+          } catch (e) {}
+        };
+        if (e) {
+          c();
+        } else {
+          if (util.isMobilePlatform) {
+            util.addEvent(window, "pagehide", (function() {
+              c();
+            }));
+          } else {
+            util.addEvent(window, "beforeunload", (function() {
+              c();
+            }));
+          }
+        }
+      };
+      ysf.analytics = function(e) {
+        var t = o.appKey, i = Y(), n = "", r = encodeURIComponent(document.referrer), a = encodeURIComponent(location.href), s = "", c = localStorage.getItem("DA-LANDPAGE") || "", l = (new Date).getTime(), f = encodeURIComponent(document.title), d = 0;
+        var u = location.hostname;
+        if (document.referrer.indexOf(u) == -1) {
+          c = encodeURIComponent(location.href);
+          c = c.slice(0, 1e3);
+          localStorage.setItem("DA-LANDPAGE", c);
+          localStorage.setItem("DA-LANDPAGE-TITLE", document.title);
+          localStorage.setItem("DA-LANDPAGE-REFERRER", r);
+        }
+        if (e) {
+          var m = window.__YSFDAROOT__ + "?ak=" + t + "&dv=" + i + "&si=" + n + "&su=" + r + "&cup=" + a + "&tm=" + l + "&cy=" + s + "&lp=" + c + "&ct=" + f + "&lt=" + d + "&u=" + window.ysf.PAGEID;
+          $(m);
+        } else {
+          if (window.__YSFVISITORRECORD__) {
+            var m = window.__YSFDAROOT__ + "?ak=" + t + "&dv=" + i + "&cup=" + a + "&tm=" + l + "&ct=" + f + "&lt=" + d + "&u=" + window.ysf.PAGEID;
+            $(m);
+          }
+        }
+        if (window.__YSFVISITORRECORD__) {
+          X();
+        }
+      };
+      var $ = function(e, t) {
+        t = t || function() {};
+        var i = new Image;
+        i.onerror = function() {
+          util.consoleWarn("faild to load qa.gif");
+        };
+        i.onload = function() {
+          t();
+        };
+        i.src = e;
+        i.width = 1;
+        i.height = 1;
+        return i;
+      };
+      var Q = function() {
+        var e = window.screen || {};
+        var t = {
+          base: ",location=0,menubar=0,scrollbars=0,status=0,toolbar=0,resizable=0",
+          layerNoInfo: {
+            param: ""
+          },
+          layerHasInfo: {
+            param: ""
+          }
+        };
+        if (o.bid) {
+          t.winNoInfo = {
+            width: 724,
+            height: 575,
+            left: Math.max(0, ((e.width || 0) - 724) / 2),
+            top: Math.max(0, ((e.height || 0) - 575) / 2)
+          };
+          t.winHasInfo = {
+            width: 944,
+            height: 575,
+            left: Math.max(0, ((e.width || 0) - 944) / 2),
+            top: Math.max(0, ((e.height || 0) - 570) / 2)
+          };
+        } else {
+          t.winNoInfo = {
+            width: 600,
+            height: 630,
+            left: Math.max(0, ((e.width || 0) - 600) / 2),
+            top: Math.max(0, ((e.height || 0) - 630) / 2)
+          };
+          t.winHasInfo = {
+            width: 842,
+            height: 632,
+            left: Math.max(0, ((e.width || 0) - 840) / 2),
+            top: Math.max(0, ((e.height || 0) - 630) / 2)
+          };
+        }
+        t.winNoInfo.param = "top=" + t.winNoInfo.top + ",left=" + t.winNoInfo.left + ",width=" + t.winNoInfo.width + ",height=" + t.winNoInfo.height + t.base;
+        t.winHasInfo.param = "top=" + t.winHasInfo.top + ",left=" + t.winHasInfo.left + ",width=" + t.winHasInfo.width + ",height=" + t.winHasInfo.height + t.base;
+        if (!util.isMobilePlatform()) {
+          switch (o["winType"]) {
+           case 1:
+            i = o["corpInfo"] ? t.layerHasInfo : t.layerNoInfo;
+            i.type = "layer";
+            break;
+
+           case 3:
+            i = {
+              type: "url",
+              param: ""
+            };
+            break;
+
+           default:
+            i = o["corpInfo"] ? t.winHasInfo : t.winNoInfo;
+            i.type = "win";
+            break;
+          }
+        } else {
+          switch (o["winMobileType"]) {
+           case 2:
+            i.type = "layer";
+            break;
+
+           default:
+            i = o["corpInfo"] ? t.winHasInfo : t.winNoInfo;
+            i.type = "win";
+            break;
+          }
+        }
+      };
+      var Z = function() {
+        var e = localStorage.getItem("YSFDVC-" + o.device), t = 0;
+        if (e != null) {
+          t = Number(e) + 1;
+        }
+        localStorage.setItem("YSFDVC-" + o.device, t);
+        o.dvctimer = t;
+      };
+      var ee = function() {
+        var e = 0, t = 3;
+        return function(i, n, r, a) {
+          var s = serialize({
+            appKey: o.appKey,
+            timestamp: (new Date).getTime(),
+            token: o.uuid,
+            local: a || 0
+          });
+          util.ajax({
+            url: ysf.DOMAIN + "webapi/user/remoteStorage.action?" + s,
+            method: "post",
+            contentType: "json",
+            data: i,
+            success: function(e) {
+              if (util.isFunction(n)) {
+                n();
+              }
+            },
+            error: function(o) {
+              console.info(o, "reportInfo err");
+              if (e < t) {
+                e++;
+                ee(i, n, r, a);
+              } else {
+                if (util.isFunction(r)) {
+                  r(o);
+                }
+              }
+            }
+          });
+        };
+      }();
+      var te = function() {
+        m && clearTimeout(m);
+        if (o.noUnreadPolling) {
+          return;
+        }
+        if (document.hidden) {
+          m = setTimeout(te, p);
+          return;
+        }
+        util.ajax({
+          url: ysf.DOMAIN + "webapi/user/getUnread.action",
+          data: {
+            appKey: o.appKey,
+            foreignId: o.uid || "",
+            deviceId: Y(),
+            bid: o.bid || "",
+            ts: (new Date).getTime()
+          },
+          success: function(e) {
+            ysf.HAS_MESSAGE_COUNT = e.count > 0;
+            o["IN_SESSION"] = e.dvcSwitch === 1;
+            ie(e.count, e.lastMessage);
+            if (e.count > 0) {
+              var t = r && r.getAttribute("data-switch");
+              if (t == "1") {
+                P("doconnect", {
+                  reconnect: 1
+                });
+              }
+            }
+            if (e.needPolling) {
+              m = setTimeout(te, e.delay || p);
+            }
+          },
+          error: function(e) {
+            var t = p;
+            if (e && e.result && e.result.delay) {
+              t = e.result.delay;
+            }
+            if (e && (e.code == 8112 || e.code == 19104 || e.code == 14001 || e.code == 16001 || e.code == 8013)) {
+              return;
+            }
+            m = setTimeout(te, t);
+          }
+        });
+      };
+      var ie = function(e, t) {
+        if (e > 0) {
+          if (ysf.isInInviteLayerMode()) {
+            ysf.displayInviteLayer(false);
+          }
+          oe(t);
+          if (o["notifyContent"] && t.time < o["notifyContent"].time) {
+            return;
+          }
+          o["notifyContent"] = t;
+          o["notifyNumber"] = e;
+          ysf.NotifyMsgAndBubble({
+            category: "notifyCircle",
+            data: {
+              circleNum: o["notifyNumber"],
+              notifyCnt: o["notifyContent"].content,
+              type: o["notifyContent"].type
+            }
+          });
+        } else {
+          ysf.NotifyMsgAndBubble({
+            category: "clearCircle"
+          });
+        }
+        var i = r && r.getAttribute("data-switch");
+        if (i != "1") {
+          ysf._unread(ysf.getUnreadMsg());
+        }
+      };
+      var oe = function() {
+        var e = {
+          image: function(e) {
+            try {
+              var t = JSON.parse(e.content);
+              e.content = t;
+            } catch (e) {}
+          },
+          richtext: function(e) {
+            try {
+              var t = JSON.parse(e.content);
+              e.content = t.content;
+            } catch (t) {
+              e.content = "[" + (local.RICHTEXT || "富文本") + "]";
+            }
+            e.type = "rich";
+          },
+          custom: function(e) {
+            try {
+              var t = JSON.parse(e.content);
+              e.content = t;
+            } catch (t) {
+              e.content = "[" + (local.RICHTEXT || "富文本") + "]";
+            }
+            if (e.content.cmd == 121) {
+              e.type = "productinfo";
+            }
+          },
+          staffInviteDetail: function(e) {
+            try {
+              var t = JSON.parse(e.content);
+              e.content = t.message;
+            } catch (t) {
+              e.content = "[" + (local.EVALUATIONINVITATION || "评价邀请") + "]";
+            }
+          },
+          userJoinEvaluate: function(e) {
+            try {
+              var t = JSON.parse(e.content);
+              e.content = t.message;
+            } catch (t) {
+              e.content = "[" + (local.EVALUATIONTHANK || "评价感谢") + "]";
+            }
+          }
+        };
+        e["file"] = e["image"];
+        return function(t) {
+          if (!!e[t.type]) {
+            e[t.type](t);
+          }
+        };
+      }();
+      var ne = function(e) {
+        var t = [];
+        if (!util.isArray(e) || !e.length) {
+          return t;
+        }
+        e.forEach((function(e) {
+          if (!e.lastMessage) {
+            e.lastMessage = {
+              content: "",
+              fromUser: 0,
+              time: e.endTime == -1 ? new Date.getTime : e.endTime,
+              type: "custom"
+            };
+          }
+          if (e.lastMessage.type === "richtext") {
+            try {
+              var t = JSON.parse(e.lastMessage.content);
+              t.content = util.replaceRichAndUnescape(t.content);
+              e.lastMessage.content = JSON.stringify(t);
+            } catch (e) {}
+          }
+        }));
+        return e;
+      };
+      var re = function() {
+        var e = 0, t = 1e5;
+        var i = 0, n = 3;
+        return function(r, a) {
+          util.ajax({
+            url: ysf.DOMAIN + "webapi/user/platform/session.action",
+            data: {
+              appKey: o.appKey,
+              offset: e,
+              limit: t,
+              total: true,
+              u: o.uid
+            },
+            method: "post",
+            success: function(e) {
+              var t = ne(e);
+              if (util.isFunction(r)) {
+                r(t);
+              }
+            },
+            error: function(e) {
+              if (e && e.code === 200) {
+                return;
+              }
+              if (i < n) {
+                i++;
+                re(r, a);
+              } else {
+                if (util.isFunction(a)) {
+                  a();
+                }
+              }
+            }
+          });
+        };
+      }();
+      ysf.style = function(e) {
+        if (!e) {
+          return;
+        }
+        var t = document.getElementsByTagName("head")[0] || document.body, i = document.createElement("style");
+        i.type = "text/css";
+        t.appendChild(i);
+        if ("textContent" in i) {
+          i.textContent = e;
+        } else if (!!i.styleSheet) {
+          i.styleSheet.cssText = e;
+        }
+      };
+      ysf.openInline = function(e, t) {
+        if (ysf.openInline.loadStatus == "loading") {
+          return;
+        }
+        if (ysf.openInline.loadStatus == "loaded" && util.isFunction(t)) {
+          return t();
+        }
+        var i = document.getElementById("YSF-PANEL-CORPINFO") || document.getElementById("YSF-PANEL-INFO") || document.getElementById("YSF-PANEL-MOBILE");
+        if (!e || !i) {
+          return;
+        }
+        ysf.openInline.loadStatus = "loading";
+        e = util.mergeUrl(e, {
+          w: o["winType"]
+        });
+        var n = function(e) {
+          var t = document.createElement("iframe");
+          t.src = e;
+          t.id = "YSF-IFRAME-LAYER";
+          t.style.width = "100%";
+          t.style.height = "100%";
+          t.setAttribute("allowFullScreen", true);
+          t.setAttribute("allow", "camera; microphone; autoplay");
+          t.setAttribute("frameborder", "0");
+          return t;
+        };
+        chatProxy = n(e);
+        i.appendChild(chatProxy);
+        util.addEvent(chatProxy, "load", (function() {
+          if (!(util.isEdge() || util.isIe())) {
+            if (o["dvcswitch"] == 1) {
+              w = true;
+              P("doconnect", {
+                doconnect: 1
+              });
+            }
+          } else {
+            if (o["dvcswitch"] == 1 && S) {
+              w = true;
+              P("doconnect", {
+                doconnect: 1
+              });
+            }
+          }
+          ysf.openInline.loadStatus = "loaded";
+          ysf._onLayerload();
+          if (util.isFunction(t)) {
+            t();
+          }
+        }));
+      };
+      ysf._$text2portrait = function() {
+        window.__YSFAPPPATH__ = "/sdk/";
+        var e = function(e) {
+          var t = '<img class="portrait_icon" data-id="' + e.id + '" src="' + e.src + '" title="' + e.tag + '" alt="' + e.tag + '">';
+          return t;
+        };
+        var t = /(\[[^\]]+\])/gi;
+        var i = window.__YSFSDKADR__ + window.__YSFAPPPATH__ + "res/portrait/emoji/";
+        var o = window.__YSF_EMOJI__;
+        return function(n) {
+          n = n.replace(/alt="(\[[^\]]+\])"/gi, 'alt=""');
+          var r = o.pmap;
+          var a = {};
+          each(r, (function(e, t) {
+            a[t.tag] = e;
+          }));
+          n = n.replace(t, (function(t, o) {
+            if (a[o]) {
+              var n = e({
+                id: a[o],
+                tag: o,
+                src: i + r[a[o]].file
+              });
+              return n;
+            } else {
+              return o;
+            }
+          }));
+          return n;
+        };
+      }();
+      ysf.showInviteLayerAuto = function(e) {
+        if (!e) {
+          return;
+        }
+        window.setTimeout((function() {
+          var t = !ysf.HAS_QIYU_OPEND && ysf.hasTodayInviteTimes(e) && e.invitePatternVo && e.invitePatternVo.mode === 2 && e.switchType === 1 && e.waitTime && !!o["sessionInvite"] && o["hidden"] != 1;
+          if (t) {
+            ysf.setTodayShowInviteTimes();
+            ysf.open({
+              invitePatternVo: e.invitePatternVo,
+              inviteTemplateId: e.id
+            }, ysf.INVITE_TPYE);
+            ysf.inviteLayer.showInvite();
+          }
+        }), e.waitTime * 1e3);
+      };
+      ysf.inviteLayer = function() {
+        return {
+          resetLayer: function() {
+            ysf.reset();
+            o["INIITE_LAYER"] = null;
+          },
+          showInvite: function() {
+            o["INIITE_LAYER"] = 1;
+          },
+          isInviteLayerShow: function() {
+            return o["INIITE_LAYER"] == 1;
+          },
+          inviteLayerHide: function() {
+            o["INIITE_LAYER"] = null;
+          }
+        };
+      }();
+      ysf.getImRoot = function(e) {
+        var t = ysf.IMROOT;
+        if (e === ysf.INVITE_TPYE && !util.isMobilePlatform()) {
+          var i = "/client/iframe";
+          t = ysf.ROOT + i;
+        }
+        return t;
+      };
+      ysf.entry = function(e) {
+        var t = function() {
+          var t = document.createElement("div");
+          if (window.__YSFTHEMELAYEROUT__) {
+            t.className = "layer-" + window.__YSFTHEMELAYEROUT__;
+          }
+          t.setAttribute("id", "YSF-BTN-HOLDER");
+          if (o["hidden"] == 1) {
+            t.style.display = "none";
+          }
+          var i = ysf.inviteText(e.inviteSetting);
+          var n = "YSF-CUSTOM-ENTRY-" + window.__YSFTHEMELAYEROUT__;
+          var r = "YSF-INVITE-IMG YSF_INVITE-IMG-" + window.__YSFTHEMELAYEROUT__;
+          var a = i && i.replace(/(<img.*?>)/g, "[" + local.IMAGE + "]").replace(/<p><br><\/p>/g, "").replace(/<p>/g, "pStartElement").replace(/<\/p>/g, "pCloseElement").replace(/<.+?>/g, "").replace(/pStartElement/g, "<p>").replace(/pCloseElement/g, "</p>");
+          var s = "";
+          if (i) {
+            s = "" + '<div class="YSF-INVITE-LAYER-WRAPPER" style="display: none">' + '<div class="YSF-INVITE-LAYER-HEADER">' + '<div class="YSF-INVITE-LAYER-HEADER-LEFT">' + '<img class="YSF-INVITE-LAYER-AVATAR" src="' + e.inviteSetting.invitePatternVo.inviteAvatar + '" alt="" />' + '<div class="YSF-INVITE-LAYER-KEFU-NAME">' + e.inviteSetting.invitePatternVo.realName + "</div>" + "</div>" + '<div id="YSF-ONLINE-INVITE-LAYER-CLOSE"></div>' + "</div>" + '<div class="YSF-INVITE-LAYER-RICHTEXT">' + ysf._$text2portrait(a) + "</div>" + "</div>" + '<div id="YSF-INVITE-LAYER-WRAPPER-ENTRY" style="display: none">' + '<div class="YSF-LAYER-ENTRY-CIRCLE"></div>' + '<img class="' + r + '" src="' + e.src + '"/>' + "</div>";
+          }
+          t.innerHTML = s + '<div id="' + n + '" class="YSF-CUSTOM-ENTRY"><img src="' + e.src + '"/></div>';
+          t.onclick = function() {
+            if (ysf.isInInviteLayerMode()) {
+              ysf.open({
+                invitePatternVo: e.inviteSetting.invitePatternVo,
+                inviteTemplateId: e.inviteSetting.id
+              });
+            } else {
+              ysf.open();
+            }
+            ysf.HAS_QIYU_OPEND = true;
+            ysf.displayInviteLayer(false);
+          };
+          document.body.appendChild(t);
+          if (i) {
+            document.querySelector("#YSF-ONLINE-INVITE-LAYER-CLOSE").onclick = function(e) {
+              e.stopPropagation();
+              ysf.displayInviteLayer(false);
+              ysf.INVITE_REJECT = true;
+              setTimeout((function() {
+                ysf.displayInviteLayer(true);
+              }), inviteSetting.intervalTime * 1e3);
+            };
+          }
+          if (e.inviteSetting && e.inviteSetting.switchType === 1 && e.inviteSetting.waitTime) {
+            setTimeout((function() {
+              ysf.displayInviteLayer(true);
+            }), e.inviteSetting.waitTime * 1e3);
+          }
+          return t;
+        };
+        var i = function(e) {
+          var t = document.createElement("span");
+          t.setAttribute("id", "YSF-BTN-CIRCLE");
+          e.appendChild(t);
+        };
+        var n = function(e) {
+          var t = document.createElement("div"), i = document.createElement("div"), o = document.createElement("span"), n = document.createElement("span");
+          t.setAttribute("id", "YSF-BTN-BUBBLE");
+          i.setAttribute("id", "YSF-BTN-CONTENT");
+          o.setAttribute("id", "YSF-BTN-ARROW");
+          n.setAttribute("id", "YSF-BTN-CLOSE");
+          n.onclick = function(e) {
+            e.stopPropagation();
+            e.preventDefault();
+            ysf.NotifyMsgAndBubble({
+              category: "clearCircle"
+            });
+          };
+          e.appendChild(t);
+          t.appendChild(i);
+          t.appendChild(o);
+          t.appendChild(n);
+        };
+        var r = t();
+        i(r);
+        n(r);
+      };
+      ysf.hasTodayInviteTimes = function(e) {
+        var t = "YSF_INVITE_SHOW_TIMES";
+        var i = JSON.parse(localStorage.getItem(t) || "{}")[util.getToday()] || 0;
+        var o = e && e.switchType === 1 && (i === 0 || e.rejectType === 1 && (!e.timesLimitType || e.timesLimit > i) || e.rejectType === 0 && !ysf.INVITE_REJECT && (!e.timesLimitType || e.timesLimit > i));
+        return o;
+      };
+      ysf.setTodayShowInviteTimes = function() {
+        var e = "YSF_INVITE_SHOW_TIMES";
+        var t = JSON.parse(localStorage.getItem(e) || "{}");
+        var i = util.getToday();
+        var n = {};
+        n[i] = t[i] ? t[i] + 1 : 1;
+        localStorage.setItem(e, JSON.stringify(n));
+        util.ajax({
+          url: ysf.DOMAIN + "webapi/invite/num",
+          method: "get",
+          data: {
+            appKey: o.appKey
+          },
+          success: function(e) {
+            console.log("[success]会话邀请次数统计接口");
+          },
+          error: function(e) {
+            console.log("[err]会话邀请次数统计接口", e);
+          }
+        });
+      };
+      ysf.inviteText = function(e) {
+        var t = e && e.invitePatternVo;
+        var i = "";
+        if (t) {
+          i = t.robotSwitch === 0 ? t.humanWelcomePrompt : t.robotWelcomePrompt;
+        }
+        return i;
+      };
+      ysf.isInInviteLayerMode = function() {
+        return document.querySelector(".YSF-INVITE-LAYER-WRAPPER") && document.querySelector(".YSF-INVITE-LAYER-WRAPPER").style.display !== "none";
+      };
+      ysf.isInvitedLayer = function() {
+        var e = ysf.inviteText(window.inviteSetting);
+        var t = window.inviteSetting && window.inviteSetting.invitePatternVo && window.inviteSetting.invitePatternVo.mode === 1 && e && ysf.hasTodayInviteTimes(window.inviteSetting) && !ysf.HAS_MESSAGE_COUNT && !o["IN_SESSION"] && !ysf.HAS_QIYU_OPEND && !!o["sessionInvite"];
+        return t;
+      };
+      ysf.displayInviteLayer = function(e) {
+        e = e && ysf.isInvitedLayer();
+        if (e) {
+          ysf.setTodayShowInviteTimes();
+        }
+        var t = document.querySelector("#YSF-BTN-HOLDER");
+        var i = "#YSF-CUSTOM-ENTRY-" + window.__YSFTHEMELAYEROUT__;
+        var o = document.querySelector(".YSF-INVITE-LAYER-WRAPPER");
+        var n = document.querySelector("#YSF-INVITE-LAYER-WRAPPER-ENTRY");
+        var r = document.querySelector(i);
+        var a = document.querySelector("#YSF-BTN-CIRCLE");
+        var s = document.querySelector("#YSF-BTN-BUBBLE");
+        function c(e) {
+          return e ? "block" : "none";
+        }
+        if (ysf.inviteText(window.inviteSetting)) {
+          o.style.display = c(e);
+          n.style.display = c(e);
+        }
+        r.style.display = c(!e);
+        if (e) {
+          t.style.maxHeight = "none";
+          t.style.maxWidth = "none";
+          a.style.display = c(false);
+          s.style.display = c(false);
+        }
+      };
+      ysf.entryPanel = function(e, t) {
+        var i = document.createElement("div"), n = util.isFrameModule() ? 0 : 1;
+        if (util.isMobilePlatform()) {
+          i.setAttribute("id", "YSF-PANEL-MOBILE");
+          i.onclick = function() {
+            if (ysf.inviteLayer.isInviteLayerShow()) {
+              return;
+            }
+            W({
+              category: "closeIframe"
+            });
+          };
+        } else {
+          parseInt(e) ? i.setAttribute("id", "YSF-PANEL-CORPINFO") : i.setAttribute("id", "YSF-PANEL-INFO");
+        }
+        i.className = "ysf-chat-layer";
+        document.body.appendChild(i);
+        i.setAttribute("data-switch", n);
+        r = i;
+        try {
+          P("status", {
+            layerOpen: n
+          });
+        } catch (e) {}
+        Z();
+        if (o.preloadIframe) {
+          ysf.openInline(ysf.url());
+        }
+        if (t && util.isFunction(t.success)) {
+          t.success();
+        }
+      };
+      ysf.invite = function() {
+        var e, t, i, n = document.createDocumentFragment();
+        var r = function() {
+          if (!!e) {
+            return;
+          }
+          e = document.createElement("div");
+          e.className = "ysf-online-invite-wrap";
+          if (i.style && i.style.type) {
+            e.innerHTML = '<div class="ysf-online-invite" style="cursor:default;width:' + i.style.bdWidth + "px;height:" + i.style.bdHeight + "px;margin-top:" + -i.style.bdHeight / 2 + 'px"><div></div><div class="close custom" title="' + (local.CLOSE || "关闭") + '"></div><img class="ysf-online-invite-img"/></div>';
+            var t = e.childNodes[0], o = t.childNodes, n = o[0];
+            if (util.isArray(i.style.oprs)) {
+              var r = null, l = null;
+              for (var f = 0; f < i.style.oprs.length; f++) {
+                r = i.style.oprs[f];
+                l = document.createElement("a");
+                if (!r) {
+                  continue;
+                }
+                l.style.position = "absolute";
+                l.style.cursor = "pointer";
+                l.style.height = r.height + "px";
+                l.style.width = r.width + "px";
+                l.style.top = r.top + "px";
+                l.style.left = r.left + "px";
+                if (r.type == 3) {
+                  l.onclick = s;
+                } else if (r.type == 2) {
+                  l.onclick = function(e) {
+                    return function() {
+                      ysf.open({
+                        invited: 1,
+                        templateId: e
+                      });
+                      c();
+                    };
+                  }(r.tplid);
+                } else if (r.type == 1) {
+                  l.href = r.url;
+                  l.target = "_blank";
+                }
+                n.appendChild(l);
+              }
+            }
+            o[1].onclick = s;
+            o[2].onload = function() {
+              window.setTimeout(a, 100);
+            };
+          } else if (i.style) {
+            e.innerHTML = '<div class="ysf-online-invite"><div class="text"></div><div class="close" title="' + (local.CLOSE || "关闭") + '"></div><img/></div>';
+            var t = e.childNodes[0], o = t.childNodes, d = o[0];
+            if ("innerText" in d) {
+              d.innerText = i.style.welcomeText;
+            } else {
+              d.textContent = i.style.welcomeText;
+            }
+            t.onclick = function() {
+              ysf.open({
+                invited: 1
+              });
+              c();
+            };
+            o[1].onclick = s;
+            o[2].onload = function() {
+              window.setTimeout(a, 100);
+            };
+          }
+        };
+        var a = function() {
+          e.style.visibility = "visible";
+        };
+        var s = function(e) {
+          e = e || window.event || {};
+          if (e.stopPropagation) {
+            e.stopPropagation();
+          } else {
+            e.cancelBubble = !0;
+          }
+          c();
+          ysf.INVITE_REJECT = true;
+          if (i.rejectType != 0) {
+            window.setTimeout(l, i.intervalTime * 1e3);
+          }
+        };
+        var c = function() {
+          n.appendChild(e);
+          e.getElementsByTagName("IMG")[0].src = ysf.CDNROOT + "res/nej_blank.gif";
+        };
+        var l = function() {
+          if (!o["sessionInvite"] || !ysf.hasTodayInviteTimes(window.inviteSetting)) {
+            return;
+          }
+          ysf.setTodayShowInviteTimes();
+          r();
+          e.style.visibility = "hidden";
+          document.body.appendChild(e);
+          e.getElementsByTagName("IMG")[0].src = i.style && i.style.type ? i.style.bdImageUrl : ysf.CDNROOT + "res/invite/1/bg.png";
+        };
+        return function(e) {
+          if (e && e.invitePatternVo && e.invitePatternVo.mode !== 0) {
+            return;
+          }
+          if (!i) {
+            i = e || {};
+            if (util.isMobilePlatform()) {
+              i.style = i.h5Style;
+            }
+          }
+          var t = function() {
+            window.setTimeout(l, (i.waitTime || 15) * 1e3);
+          };
+          if (o.timestamp) {
+            t();
+          } else {
+            o.onackdone = t;
+          }
+        };
+      }();
+      ysf.checkOpenLayerSize = function(e, t) {
+        var i = 360, n = 500;
+        if (!o.layerSize || util.isMobilePlatform()) {
+          return;
+        }
+        var r = o.layerSize;
+        var a = parseInt(r.height) > n;
+        var s = parseInt(r.width) > i;
+        if (t) {
+          s && (e.style.width = 0);
+          a && (e.style.height = 0);
+          return;
+        }
+        if (s) {
+          e.style.width = util.includes(r.width, "px") ? r.width : r.width + "px";
+        }
+        if (a) {
+          e.style.height = util.includes(r.height, "px") ? r.height : r.height + "px";
+        }
+      };
+      ysf.openLayer = function() {
+        return function(e) {
+          var t = document.getElementById("YSF-PANEL-CORPINFO") || document.getElementById("YSF-PANEL-INFO") || document.getElementById("YSF-PANEL-MOBILE"), i = document.getElementById("YSF-BTN-HOLDER"), o = document.getElementById("YSF-IFRAME-LAYER");
+          if (!t) {
+            return;
+          }
+          i.style.display = "none";
+          t.className = "ysf-chat-layer ysf-chat-layeropen";
+          ysf.checkOpenLayerSize(t);
+          if (util.isMobilePlatform() && o) {
+            o.className = "ysf-chat-mobile-layeropen" + (e === ysf.INVITE_TPYE ? " ysf-chat-mobile-invite-layer" : "");
+          }
+          E = document.body.scrollTop || document.documentElement.scrollTop;
+          if (document.getElementById("YSF-PANEL-MOBILE")) {
+            document.body.classList.add("YSF-PANEL-BODY-FIXED");
+            document.getElementById("YSF-PANEL-MOBILE").addEventListener("touchmove", (function(e) {
+              e.stopPropagation();
+            }));
+          }
+          t.setAttribute("data-switch", 1);
+          try {
+            P("status", {
+              layerOpen: 1
+            });
+          } catch (e) {}
+        };
+      }();
+      window.windowurl = "";
+      ysf.openWin = function() {
+        return function(e, t, i) {
+          if (util.isMobilePlatform()) {
+            if (i && i.replace) {
+              window.location.replace(e);
+            } else {
+              window.location.href = e;
+            }
+          } else {
+            window.windowurl = window.open(e, "YSF_SERVICE_" + (o.appKey || "").toUpperCase(), t.param);
+            if (!window.windowurl && !util.isIe()) {
+              window.location.href = e;
+            }
+          }
+        };
+      }();
+      ysf.openUrl = function() {
+        return function(e, t, i) {
+          var n = e.replace(/\/iframe/g, "");
+          window.windowurl = window.open(n, "YSF_SERVICE_" + (o.appKey || "").toUpperCase(), t.param);
+          if (!window.windowurl && !util.isIe()) {
+            if (i && i.replace) {
+              window.location.replace(n);
+            } else {
+              window.location.href = n;
+            }
+          }
+        };
+      }();
+      ysf.close = function() {
+        if (window.windowurl) {
+          window.windowurl.close();
+        } else if (i.type === "layer") {
+          var e = document.getElementById("YSF-PANEL-CORPINFO") || document.getElementById("YSF-PANEL-INFO") || document.getElementById("YSF-PANEL-MOBILE"), t = document.getElementById("YSF-BTN-HOLDER");
+          delete ysf.openInline.loadStatus;
+          document.body.removeChild(e);
+          document.body.removeChild(t);
+          s = true;
+        }
+      };
+      ysf.NotifyMsgAndBubble = function(e) {
+        var t = {
+          clearCircle: function(e) {
+            var t = "YSF-" + Y() + "-MSGNUMBERS", i = document.getElementById("YSF-BTN-CIRCLE"), n = document.getElementById("YSF-BTN-BUBBLE");
+            n && (n.style.display = "none");
+            i && (i.style.display = "none");
+            localStorage.setItem(t, 0);
+            o["notifyNumber"] = 0;
+            o["notifyContent"] = "";
+            d = 0;
+          },
+          notifyCircle: function(e) {
+            var t = "YSF-" + Y() + "-MSGNUMBERS";
+            localStorage.setItem(t, e.data.circleNum);
+            var i = document.getElementById("YSF-BTN-BUBBLE"), n = document.getElementById("YSF-BTN-CONTENT"), r = document.getElementById("YSF-BTN-CIRCLE");
+            var a = document.getElementById("YSF-PANEL-CORPINFO") || document.getElementById("YSF-PANEL-INFO") || document.getElementById("YSF-PANEL-MOBILE");
+            var s = {
+              image: function(e) {
+                return "[" + (local.IMAGE || "图片") + "]";
+              },
+              audio: function(e) {
+                return "[" + (local.AUDIO || "音频") + "]";
+              },
+              video: function(e) {
+                return "[" + (local.VIDEO || "视频") + "]";
+              },
+              file: function(e) {
+                return "[" + (local.FILE || "文件") + "]" + e.name;
+              },
+              text: function(e) {
+                return e;
+              },
+              rich: function(e) {
+                return util.replaceRichAndUnescape(e);
+              },
+              productinfo: function(e) {
+                return "[" + (local.PRD_LINK || "商品链接") + "]";
+              },
+              staffInviteDetail: function(e) {
+                return util.replaceRichAndUnescape(e);
+              },
+              userJoinEvaluate: function(e) {
+                return util.replaceRichAndUnescape(e);
+              }
+            };
+            var c = util.isFrameModule() && a && a.getAttribute("data-switch") == 0 && s[e.data.type] && o["sdkCustom"] == 0;
+            if (!util.isFrameModule() || c) {
+              r && (r.style.display = "block");
+              i && (i.style.display = "block");
+              r && (r.innerHTML = e.data.circleNum > 99 ? "99+" : e.data.circleNum);
+              n && (n.innerHTML = s[e.data.type](e.data.notifyCnt));
+            }
+          }
+        };
+        var i = t[e.category];
+        if (!!i) {
+          i(e);
+        }
+      };
+      ysf.getUnreadMsg = function() {
+        return {
+          type: o["notifyContent"].type,
+          message: o["notifyContent"].content,
+          total: o["notifyNumber"]
+        };
+      };
+      ysf.getConversationThrottle = util.throttleDebounce((function() {
+        re(ysf._onConversation);
+      }), 2e3);
+      ysf.initNim = function() {
+        var e = {
+          NULL: 0,
+          INIT: 1,
+          CONNECTED: 2
+        };
+        var t = -1;
+        var i = 3e3;
+        var n = e.NULL;
+        var r = 8e3;
+        var a = function() {
+          return {
+            db: false,
+            syncBroadcastMsgs: false,
+            syncExtraTeamInfo: false,
+            syncFilter: true,
+            syncFriendUsers: false,
+            syncFriends: false,
+            syncRelations: false,
+            syncRoamingMsgs: false,
+            syncRobots: false,
+            syncSessionUnread: false,
+            syncStickTopSessions: false,
+            syncSuperTeamRoamingMsgs: false,
+            syncSuperTeams: false,
+            syncTeamMembers: false,
+            syncTeams: false,
+            defaultLinkUrl: "https://weblink-qiyu.netease.im",
+            privateConf: {
+              lbs_web: window.MIN_LBS
+            },
+            onmsg: h,
+            onerror: I,
+            onconnect: w,
+            ondisconnect: E,
+            oncustomsysmsg: v,
+            onofflinefiltermsgs: T
+          };
+        }();
+        var s = function(e) {
+          o["yinxin-state"] = e;
+        };
+        var c = function() {
+          return o["yinxin-state"];
+        };
+        var l = function(e) {
+          var t = o["yunxin-user"] || {};
+          if (window.localStorage) {
+            var i = "X-" + e.toUpperCase() + "-YSF-INFO", n = localStorage.getItem(i);
+            if (!n) {
+              return;
+            }
+            var r = util.query2Object(n);
+            if (!!r.uid) {
+              t.fid = r.uid;
+            }
+            r.source = n;
+            return r;
+          }
+        };
+        var f = function(e) {
+          try {
+            return JSON.parse(e);
+          } catch (e) {
+            return null;
+          }
+        };
+        var d = function(e, t) {
+          if (!t) {
+            window.setTimeout(m._$bind(this, appkey), i);
+            return;
+          }
+          g(t);
+          t.appKey = e;
+          y(t, a);
+          window.nim = ysf.nim = new NIM(t);
+          re(ysf._getConversation)();
+        };
+        var u = function(e, t) {
+          util.ajax({
+            url: ysf.DOMAIN + "webapi/user/create.action?appKey=" + t,
+            data: e,
+            method: "post",
+            fullResult: true,
+            contentType: "json",
+            success: function(e) {
+              var i = e.info;
+              e.result = {
+                token: i.token,
+                account: i.accid,
+                exchange: i.exchange,
+                bid: i.bid
+              };
+              d(t, e.result);
+            },
+            error: function(e) {
+              console.log(e, "userCreate error");
+            }
+          });
+        };
+        var m = function(e) {
+          var t = {
+            deviceid: o.uid || o.device,
+            appKey: e,
+            token: o.uuid || ""
+          };
+          if (o.uid) {
+            t.foreignid = o.uid;
+          }
+          if (o.authToken) {
+            t.authtoken = o.authToken;
+          }
+          u(t, e);
+        };
+        var p = function(e, t) {
+          if (!util.isArray(e) || !util.isFunction(t)) {
+            return;
+          }
+          var i = e.length;
+          var o = 0;
+          e.forEach((function(e) {
+            util.loadJS(e, (function() {
+              o++;
+              if (o >= i) {
+                t();
+              }
+            }));
+          }));
+        };
+        function g(e) {
+          var t = o["yunxin-user"];
+          if (!t) {
+            o["yunxin-user"] = e;
+          } else {
+            y(t, e);
+          }
+        }
+        function y(e, t) {
+          each(t, (function(t, i) {
+            e[t] = i;
+          }));
+          return e;
+        }
+        function _(e) {
+          var t = e.idClient.split("#")[0];
+          if (!t) {
+            console.error("msg idClient without #", e.idClient, e);
+            return e;
+          }
+          return y(e, {
+            id: e.idClient,
+            bid: e.from,
+            sessionid: t
+          });
+        }
+        function h(e, t) {
+          console.log(e, t, "_cbReceiveMessage");
+          var i = {
+            image: "file",
+            audio: "file",
+            video: "file"
+          };
+          var o = {
+            60: !0,
+            90: !0,
+            95: !0,
+            72: !0,
+            200: !0,
+            65: !0,
+            203: !0,
+            121: !0,
+            59: !0
+          };
+          e = _(e);
+          if (e.type == "custom") {
+            e.isOffline = t;
+            v(e, o);
+            return;
+          }
+          S(y(e, {
+            content: e[i[e.type] || e.type],
+            reallyType: e.type
+          }));
+        }
+        function v(e, t, i) {
+          var o = e.content || "";
+          var n = [ 9, 17, 59, 42, 1002, "-1000", 11056, 108, 11060 ];
+          try {
+            o = JSON.parse(o);
+            if (!!t && !t[o.cmd] && !i) {
+              return;
+            }
+            if (~n.indexOf(o.cmd) || ~n.indexOf(i)) {
+              return;
+            }
+            if (o.cmd == 65) {
+              o.content = util.replaceRichAndUnescape(o.content);
+              e.content = JSON.stringify(o);
+            }
+          } catch (e) {}
+          var r = o.sessionid || o.currentSessionId || o.workSheetTemplateVo && o.workSheetTemplateVo.sessionId;
+          S(y(e, {
+            cmd: o.cmd,
+            sessionid: r
+          }));
+        }
+        function S(e) {
+          ysf._onSessionMessage(e);
+          if (o["onConversation"]) {
+            ysf.getConversationThrottle();
+          }
+        }
+        function w(t) {
+          console.log(t, "_cbConnect2Yunxin");
+          if (t.ip) {
+            g({
+              ip: t.ip
+            });
+          }
+          s(e.CONNECTED);
+          b();
+        }
+        function I(e) {
+          var t = {
+            302: function() {
+              console.error("连接失败");
+            }
+          };
+          var i = t[e.code];
+          if (util.isFunction(i)) {
+            i.call(this);
+          } else if (typeof i == "string") {
+            t[i].call(this);
+          }
+        }
+        function E() {
+          s(e.NULL);
+        }
+        function T(e) {
+          e.sort((function(e, t) {
+            return e.time > t.time;
+          }));
+          e.forEach((function(e) {
+            h(e, true);
+          }));
+        }
+        function b() {
+          var e = this;
+          var t = function() {
+            x({
+              content: {
+                cmd: -1e3,
+                deviceid: Y()
+              }
+            });
+            if (e._timeout) {
+              clearTimeout(e._timeout);
+            }
+            e._timeout = setTimeout((function() {
+              t();
+            }), r);
+          };
+          t();
+        }
+        function x(e) {
+          ysf.nim.sendCustomSysMsg({
+            to: e.bid || t,
+            cc: !0,
+            filter: !0,
+            scene: "p2p",
+            content: JSON.stringify(e.content),
+            done: e.done
+          });
+        }
+        function N() {
+          ysf.nim && ysf.nim.disconnect();
+          s(e.NULL);
+        }
+        function j() {
+          return ~ysf.DOMAIN.indexOf("qytest.netease");
+        }
+        return {
+          _$connect: function(t) {
+            N();
+            if (c() !== e.NULL) {
+              return;
+            }
+            s(e.INIT);
+            var i = [ "//res.qiyukf.net/storage/NIM_Web_NIM_v9.8.103.js" ];
+            p(i, (function() {
+              m(t);
+            }));
+          },
+          _$disConnect: function() {
+            N();
+          }
+        };
+      }();
+      ysf.checkBaiduSelfBuild = function() {
+        try {
+          var e = document.referrer;
+          var t = util.getSearchParams(e, "xst");
+          if (t && util.includes(e, "baidu.com")) {
+            return t;
+          }
+          return null;
+        } catch (e) {
+          return null;
+        }
+      };
+      ysf.config = function(e, t) {
+        if (!e) {
+          return;
+        }
+        e.reallyUid = e.uid;
+        C(e);
+        if (!t) {
+          each(e, (function(e) {
+            if (n.indexOf(e) < 0) {
+              n.push(e);
+            }
+          }));
+        }
+        if (!!o.appKey) {
+          A(e.uid);
+          k({
+            upToServer: true,
+            success: e.success,
+            error: e.error,
+            local: t || 0
+          });
+          Q();
+          te();
+          if (o["connectYunxin"]) {
+            ysf.initNim._$connect(o["appKey"]);
+          }
+        }
+      };
+      var ae = function(e, i) {
+        util.ajax({
+          url: ysf.DOMAIN + "webapi/user/company/get/getCorpStatus.action",
+          method: "get",
+          data: {
+            appKey: o.appKey,
+            shopCode: e
+          },
+          success: function(e) {
+            t = e;
+            if (util.isFunction(i)) {
+              i();
+            }
+          },
+          error: function(e) {
+            console.log("[err]平台企业子企业是否开启", e);
+            if (util.isFunction(i)) {
+              i();
+            }
+          }
+        });
+      };
+      ysf.url = function(e, i) {
+        if (!o.appKey) {
+          return "";
+        }
+        var n = {
+          k: o.appKey,
+          u: o.uid || "",
+          d: Y(),
+          uuid: o.uuid,
+          gid: o.groupid || 0,
+          sid: o.staffid || 0,
+          qtype: o.qtype || 0,
+          welcomeTemplateId: o.welcomeTemplateId || 0,
+          dvctimer: o.dvctimer || 0,
+          robotShuntSwitch: o.robotShuntSwitch || 0,
+          hc: o.hc || 0,
+          robotId: o.robotId || 0,
+          pageId: ysf.PAGEID,
+          shuntId: o.shuntId || 0,
+          ctm: (new util.Base64).encode(o.uid + "--" + (new Date).getTime()),
+          wxwId: o.wxworkAppId || "",
+          language: o.language || "",
+          isShowBack: o.isShowBack || 0,
+          shortcutTemplateId: o.shortcutTemplateId || ""
+        };
+        if (o.spkf == 1) {
+          n.spkf = 1;
+        }
+        if (o.APPbackPop) {
+          n.APPbackPop = o.APPbackPop;
+        }
+        if (o.APPBridgePermission) {
+          n.APPBridgePermission = o.APPBridgePermission;
+        }
+        if (o.usealipayjs) {
+          n.usealipayjs = o.usealipayjs;
+        }
+        if (o.isCaptureSupported) {
+          n.isCaptureSupported = o.isCaptureSupported;
+        }
+        if (o.isCustomPickSource) {
+          n.isCustomPickSource = o.isCustomPickSource;
+        }
+        if (o.usewxjs) {
+          n.usewxjs = o.usewxjs;
+        }
+        if (o.downloadPageUrl) {
+          n.downloadPageUrl = o.downloadPageUrl;
+        }
+        if (o.customUrl) {
+          n.customUrl = o.customUrl;
+        }
+        if (o.appName) {
+          n.appName = o.appName;
+        }
+        if (o.checkPermission) {
+          n.checkPermission = o.checkPermission;
+        }
+        if (o.disableMultiple) {
+          n.disableMultiple = o.disableMultiple;
+        }
+        if (o.emojiPopoverWidth) {
+          n.emojiPopoverWidth = o.emojiPopoverWidth;
+        }
+        if (i == ysf.INVITE_TPYE) {
+          n.isInvite = 1;
+        }
+        if (window.sdkTemplateId) {
+          n.templateId = window.sdkTemplateId;
+        }
+        if (window.shuntId) {
+          n.shuntId = window.shuntId;
+        }
+        if (e && e.templateId) {
+          n.templateId = e.templateId;
+        }
+        if (e && e.invited) {
+          n.invited = 1;
+        }
+        if (e && e.invitePatternVo && i != ysf.INVITE_TPYE) {
+          n.invited = 1;
+          n.inviteTemplateId = e.inviteTemplateId;
+          n.robotSwitch = e.invitePatternVo.robotSwitch;
+          n.humanWelcomeTemplateId = e.invitePatternVo.welcomeTemplateId;
+          n.robotId = e.invitePatternVo.robotId;
+          n.welcomeTemplateId = e.invitePatternVo.robotWelcomeTemplateId;
+          n.inviteGroupId = e.invitePatternVo.inviteGroupId;
+        }
+        if (!util.isMobilePlatform() && window.__YSFWINTYPE__ == 1 && o.layerSize && o.layerSize.inputHeight) {
+          n.ipth = o.layerSize.inputHeight;
+        }
+        if (e && e.language) {
+          n.language = e.language;
+        }
+        if (o.unconfirm) {
+          n.unconfirm = o.unconfirm;
+        }
+        if (o.debugger) {
+          n.debugger = o.debugger;
+        }
+        if (!util.isMobilePlatform() && window.__YSFWINTYPE__ == 1) {
+          n.allowNewTab = o.allowNewTab || 0;
+        }
+        each({
+          n: "name",
+          e: "email",
+          m: "mobile"
+        }, (function(e, t) {
+          var i = o[t];
+          if (!!i) {
+            n[e] = i;
+          }
+        }));
+        if (o.customSkin) {
+          each({
+            topbarBgColor: "topbarBgColor",
+            chatPanelBgColor: "chatPanelBgColor",
+            lMsgColor: "lMsgColor",
+            rMsgColor: "rMsgColor",
+            lMsgBgColor: "lMsgBgColor",
+            rMsgBgColor: "rMsgBgColor",
+            buttonColor: "buttonColor",
+            buttonBgColor: "buttonBgColor",
+            editorColor: "editorColor",
+            editorBgColor: "editorBgColor",
+            corpInfoColor: "corpInfoColor",
+            corpInfoTitleColor: "corpInfoTitleColor",
+            corpInfoBgColor: "corpInfoBgColor",
+            tipColor: "tipColor",
+            linkColor: "linkColor",
+            borderColor: "borderColor"
+          }, (function(e, t) {
+            var i = o.customSkin[t];
+            if (!!i) {
+              n[e] = i;
+            }
+          }));
+        }
+        n.t = encodeURIComponent(o.title || document.title);
+        if (o.goodsCId) {
+          n.goodsCId = o.goodsCId;
+        }
+        if (o.goodsCName) {
+          n.goodsCName = o.goodsCName;
+        }
+        if (o.goodsId) {
+          n.goodsId = o.goodsId;
+        }
+        if (o.orderId) {
+          n.orderId = o.orderId;
+        }
+        if (o.orderStageType) {
+          n.orderStageType = o.orderStageType;
+        }
+        if ((e && e.bid || o.bid) && t) {
+          n.bid = e && e.bid || o.bid;
+          return ysf.getImRoot(i) + "/trade" + "?" + serialize(n);
+        }
+        return ysf.getImRoot(i) + "?" + serialize(n);
+      };
+      ysf.track = function(e, t) {
+        var i = o.appKey, n = Y(), r = encodeURIComponent(location.href), a = localStorage.getItem("DA-LANDPAGE") || "", s = (new Date).getTime(), c = e, l = "";
+        desc = JSON.stringify(t), tp = 1;
+        var f = function() {
+          try {
+            var e = window.__YSFDAROOT__ + "?ak=" + i + "&dv=" + n + "&cup=" + r + "&lp=" + a + "&tm=" + s + "&ct=" + c + "&lt=" + l + "&tp=" + tp + "&desc=" + desc + "&u=" + window.ysf.PAGEID;
+            $(e);
+          } catch (e) {}
+        };
+        f();
+      };
+      ysf.logoff = function() {
+        L();
+        util.clearLocalItems(util.findLocalItems(/msgnumbers/gi));
+        n.forEach((function(e) {
+          delete o[e];
+        }));
+      };
+      ysf.openByLink = function(e) {
+        var t = ysf.url();
+        if (!t) {
+          return;
+        }
+        e = e || {};
+        var i = e.target || e.srcElement;
+        if (!i || i.tagName != "A") {
+          return;
+        }
+        i.href = t;
+      };
+      var se = function(e) {
+        if (e.clear) {
+          return null;
+        }
+        e.title = e.title && e.title.length > 100 ? e.title.slice(0, 100) : e.title;
+        e.desc = e.desc && e.desc.length > 300 ? e.desc.slice(0, 300) : e.desc;
+        e.note = e.note && e.note.length > 100 ? e.note.slice(0, 100) : e.note;
+        var t = {
+          pageId: ysf.PAGEID,
+          template: e.template,
+          cardType: e.cardType,
+          sendByUser: e.sendByUser,
+          auto: e.sendByUser === 1 ? 0 : 1,
+          show: e.sendByUser === 1 ? 1 : e.show,
+          actionText: e.actionText,
+          actionTextColor: e.actionTextColor,
+          sendProToRobot: e.sendProToRobot,
+          picture: e.picture,
+          title: e.title,
+          desc: e.desc,
+          url: e.url,
+          note: e.note,
+          price: e.price,
+          goodsId: e.goodsId,
+          goodsCId: e.goodsCId,
+          goodsCName: e.goodsCName,
+          intent: e.intent,
+          payMoney: e.payMoney,
+          orderId: e.orderId,
+          orderTime: e.orderTime,
+          orderSku: e.orderSku,
+          orderCount: e.orderCount,
+          orderStatus: e.orderStatus,
+          orderStageType: e.orderStageType,
+          floatCardSend: e.floatCardSend || 0,
+          info: e.info || {},
+          agentId: e.agentId || ""
+        };
+        if (e.tags && util.isArray(e.tags)) {
+          t.tags = JSON.stringify(e.tags);
+        }
+        if (e.sendKefuOffline) {
+          t.sendKefuOffline = e.sendKefuOffline;
+        }
+        if (e.customLabel) {
+          t.customLabel = JSON.stringify(e.customLabel);
+        }
+        if (e.params) {
+          t.params = e.params;
+        }
+        if (!!o.bid) {
+          t.bid = o.bid;
+        }
+        return t;
+      };
+      ysf.product = function(e) {
+        var t = se(e);
+        U({
+          data: t,
+          success: e.success,
+          error: e.error
+        });
+      };
+      ysf.clearProduct = function(e) {
+        e = e || {};
+        ysf.product({
+          clear: true,
+          success: e.success,
+          error: e.error
+        });
+      };
+      var ce = function(e) {
+        if (e.clear) {
+          return null;
+        }
+        var t = {
+          uuid: e.uuid,
+          type: e.type,
+          cards: e.cards || [],
+          floatCards: e.floatCards || [],
+          auto: e.sendByUser === 1 ? 0 : 1,
+          sendByUser: e.sendByUser,
+          sendKefuOffline: e.sendKefuOffline || 0,
+          sendProToRobot: e.sendProToRobot,
+          intent: e.intent,
+          params: e.params || {}
+        };
+        if (e.sendByUser === 1) {
+          if (e.actionText) {
+            t.actionText = e.actionText;
+          }
+          if (e.actionTextColor) {
+            t.actionTextColor = e.actionTextColor;
+          }
+          if (e.hideAction) {
+            t.hideAction = e.hideAction;
+          }
+        }
+        if (!!o.bid) {
+          t.bid = o.bid;
+        }
+        return t;
+      };
+      ysf.cardMessage = function(e) {
+        if (e.clear) {
+          D({
+            data: null,
+            success: e.success,
+            error: e.error
+          });
+          return;
+        }
+        if (!e.cards || e.cards.length === 0) {
+          console.error("cards is required");
+          e.error && e.error("cards is required");
+          return;
+        }
+        var t = ce(e);
+        D({
+          data: t,
+          success: e.success,
+          error: e.error
+        });
+      };
+      var le = function(e) {
+        if (e.data === undefined || e.data === null) {
+          return null;
+        }
+        var t = {
+          uuid: e.uuid,
+          data: e.data,
+          description: e.description || "",
+          auto: e.sendByUser === 1 ? 0 : 1,
+          sendByUser: e.sendByUser
+        };
+        if (e.sendByUser === 1) {
+          if (e.actionText) {
+            t.actionText = e.actionText;
+          }
+          if (e.actionTextColor) {
+            t.actionTextColor = e.actionTextColor;
+          }
+          if (e.hideAction) {
+            t.hideAction = e.hideAction;
+          }
+        }
+        if (!!o.bid) {
+          t.bid = o.bid;
+        }
+        return t;
+      };
+      ysf.customMessage = function(e) {
+        var t = le(e);
+        V({
+          data: t,
+          success: e.success,
+          error: e.error
+        });
+      };
+      ysf.sendProduct = function(e) {
+        var t = e.success;
+        var i = e.error;
+        delete e.success;
+        delete e.error;
+        var o = se(e);
+        M({
+          type: "sendProduct",
+          data: o
+        }).then(t).catch(i);
+      };
+      ysf.sendCardMessage = function(e) {
+        if (!e.cards || e.cards.length === 0) {
+          console.error("cards is required");
+          e.error && e.error("cards is required");
+          return;
+        }
+        var t = e.success;
+        var i = e.error;
+        delete e.success;
+        delete e.error;
+        var o = ce(e);
+        M({
+          type: "sendCardMessage",
+          data: o
+        }).then(t).catch(i);
+      };
+      ysf.clearCustomCard = function(e) {
+        e = e || {};
+        ysf.cardMessage({
+          clear: true,
+          success: e.success,
+          error: e.error
+        });
+      };
+      ysf.sendCustomMessage = function(e) {
+        var t = e.success;
+        var i = e.error;
+        delete e.success;
+        delete e.error;
+        var o = le(e);
+        M({
+          type: "sendCustomMessage",
+          data: o
+        }).then(t).catch(i);
+      };
+      ysf.open = function(e, t, n) {
+        I = e;
+        var r = ysf.url(e, t, n);
+        if (!r) {
+          return;
+        }
+        var a = t || i.type;
+        switch (a) {
+         case "win":
+          ysf.openWin(r, i, n);
+          break;
+
+         case "layer":
+          ysf.openInline(r, (function() {
+            var i = e && e.invitePatternVo && e.invitePatternVo.screenType == 2 && util.isMobilePlatform() ? "" : t;
+            ysf.openLayer(i);
+            try {
+              if (s && o["dvcswitch"] == 0) {
+                P("doconnect", {
+                  doconnect: 1
+                });
+                s = false;
+              }
+            } catch (e) {}
+            if (o["dvcswitch"] == 0 && o["pushswitch"] == 1 || d > 0) {
+              P("dopushmsgread", {
+                ids: u
+              });
+              u = [];
+            }
+            if (!s && o["notifyNumber"] > 0) {
+              P("doconnect");
+            }
+            ysf.NotifyMsgAndBubble({
+              category: "clearCircle"
+            });
+          }));
+          break;
+
+         case "url":
+          ysf.openUrl(r, i, n);
+          break;
+        }
+      };
+      ysf.init = function(e, t, i) {
+        window.inviteSetting = t || {};
+        var n = function() {
+          ysf.entry({
+            src: e,
+            inviteSetting: t || {}
+          });
+          var n = t && t.invitePatternVo && t.invitePatternVo.mode === 2 && t.switchType === 1;
+          if (util.isFrameModule() || n) {
+            ysf.entryPanel(o["corpInfo"], i);
+          }
+          ysf.showInviteLayerAuto(t);
+        };
+        if (util.isFrameModule()) {
+          setTimeout((function() {
+            util.ajax({
+              url: ysf.DOMAIN + "webapi/user/dvcSession.action?appKey=" + o["appKey"] + "&d=" + o["device"] + "&f=" + o["uid"],
+              method: "post",
+              success: function(e) {
+                h = true;
+                o["dvcswitch"] = e.dvcSwitch;
+                o["pushswitch"] = e.pushSwitch || 0;
+                o["pushmsgid"] = e.batchIdList || 0;
+                if (util.isFrameModule() == "mobileFrame") {
+                  o["dvcswitch"] = 0;
+                }
+                n();
+                if (g && !v) {
+                  v = true;
+                  for (var t = 0; t < y.length; t++) {
+                    var i = y[t], r = i.func, a = i.arg;
+                    r.apply(null, a);
+                  }
+                }
+              },
+              error: function() {
+                h = true;
+                o["dvcswitch"] = 0;
+                o["pushswitch"] = 0;
+                n();
+                if (g && !v) {
+                  v = true;
+                  for (var e = 0; e < y.length; e++) {
+                    var t = y[e], i = t.func, r = t.arg;
+                    i.apply(null, r);
+                  }
+                }
+              }
+            });
+          }), 1e3);
+        } else {
+          o["dvcswitch"] = 0;
+          o["pushswitch"] = 0;
+          n();
+        }
+      };
+      ysf.reset = function(e) {
+        var t = document.getElementById("YSF-PANEL-CORPINFO") || document.getElementById("YSF-PANEL-INFO") || document.getElementById("YSF-PANEL-MOBILE"), i = document.getElementById("YSF-BTN-HOLDER");
+        delete ysf.openInline.loadStatus;
+        document.body.removeChild(t);
+        document.body.removeChild(i);
+        ysf.init(o["imgSrc"], window.inviteSetting, {
+          success: e && e.success,
+          error: e && e.error
+        });
+        s = true;
+      };
+      util.addEvent(window, "beforeunload", (function() {
+        var e = "YSFDVC-" + o["device"], t = "YSFMSG-" + o["appKey"], i = Number(localStorage.getItem(e));
+        if (i > 0) {
+          localStorage.setItem(e, --i);
+        }
+        util.clearLocalItems(util.findLocalItems(new RegExp(t, "ig")));
+      }));
+      ysf.on = function() {
+        var e = {
+          onload: "load",
+          unread: 1
+        };
+        return function(e) {
+          var t = Object.prototype.toString.call(e).slice(8, -1);
+          if (/object/gi.test(t)) {
+            for (var i in e) {
+              if ("onload" == i && util.isFunction(e[i])) {
+                if (!g) {
+                  util.addLoadEventForProxy(e[i]);
+                } else {
+                  e[i]();
+                }
+              } else if ("onLayerload" == i && util.isFunction(e[i])) {
+                if (ysf.openInline.loadStatus == "loaded") {
+                  e[i]();
+                } else {
+                  ysf["_" + i] = e[i];
+                }
+              } else if (util.isFunction(ysf[i]) && util.isFunction(e[i])) {
+                ysf["_" + i] = e[i];
+              }
+            }
+          } else {
+            util.consoleWarn("波比(｡･∀･)ﾉ: 请保持正确的监听姿势...");
+          }
+        };
+      }();
+      ysf.getPushMessage = function(e) {
+        P("dogetpushmsg", {
+          ids: e
+        });
+      };
+      ysf._unread = function() {};
+      ysf.unread = function() {
+        return {
+          type: o["notifyContent"].type,
+          message: o["notifyContent"].content,
+          total: o["notifyNumber"]
+        };
+      };
+      ysf._onLayerload = function() {};
+      ysf.clearDragresize = function(e) {
+        try {
+          var t = window.location.hostname.split(".")[0];
+          var i = [ "callcenter", "session", "qualitysession", "qualitycallsession", "worksheet", "callflow", "leave", "monitor", "usercenter" ];
+          if (i.indexOf(e) > -1) {
+            util.clearLocalItems(util.findLocalItems(new RegExp(t + "-" + e, "ig")));
+          } else {
+            for (var o = 0; o < i.length; o++) {
+              util.clearLocalItems(util.findLocalItems(new RegExp(t + "-" + i[o], "ig")));
+            }
+          }
+        } catch (e) {}
+      };
+      ysf.setAuthToken = ysf.setToken = function(e) {
+        o["authToken"] = e;
+        k({});
+      };
+      ysf.pollAuthToken = function() {
+        var e = 0;
+        var t = -1;
+        var i = 4;
+        return function(o, n) {
+          var r = function(i) {
+            var r = i && i.authToken;
+            if (!r) {
+              util.consoleError("result has not token", i);
+              return;
+            }
+            ysf.setAuthToken(i.authToken);
+            e = 0;
+            clearInterval(t);
+            t = setTimeout((function() {
+              ysf.pollAuthToken(o, n);
+            }), n.interval);
+            if (util.isFunction(n.onsuccess)) {
+              n.onsuccess(i);
+            }
+          };
+          var a = function(t) {
+            if (e < i) {
+              e++;
+              ysf.pollAuthToken(o, n);
+            }
+            if (util.isFunction(n.onerror)) {
+              n.onerror(t);
+            }
+          }, s = n.method || "GET";
+          i = n.tryTime || 4;
+          if (n.interval === null) {
+            util.consoleError("pollauthtoken is not set interval", n);
+            return;
+          }
+          util.ajax({
+            url: o,
+            method: s,
+            data: n.data,
+            success: r,
+            error: a
+          });
+        };
+      }();
+      function fe(e, t) {
+        var i = ysf[e];
+        if (!util.isFunction(i)) {
+          return;
+        }
+        if (g) {
+          return i.apply(null, t);
+        } else {
+          switch (e) {
+           case "onready":
+           case "onLayerload":
+           case "onunread":
+           case "config":
+           case "product":
+           case "logoff":
+           case "setAuthToken":
+           case "pollAuthToken":
+           case "onConversation":
+           case "onSessionMessage":
+           case "getConversation":
+           case "cardMessage":
+           case "customMessage":
+            y.push({
+              func: i,
+              arg: t
+            });
+            break;
+
+           case "open":
+           case "url":
+           case "track":
+           case "getUnreadMsg":
+            util.consoleWarn("can not exec" + e + "before sdk ready");
+
+           default:
+            break;
+          }
+        }
+      }
+      ysf.onready = function(e) {
+        util.isFunction(e) && e();
+      };
+      ysf.onunread = function(e) {
+        ysf.on({
+          unread: e
+        });
+      };
+      ysf.onLayerload = function(e) {
+        ysf.on({
+          onLayerload: e
+        });
+      };
+      ysf.getConversation = function(e) {
+        ysf.on({
+          getConversation: e
+        });
+      };
+      ysf._getConversation = function() {};
+      ysf.onConversation = function(e) {
+        ysf.on({
+          onConversation: e
+        });
+        o["onConversation"] = true;
+      };
+      ysf._onConversation = function() {};
+      ysf.onSessionMessage = function(e) {
+        ysf.on({
+          onSessionMessage: e
+        });
+      };
+      ysf._onSessionMessage = function() {};
+      ysf.initData = function() {
+        each({
+          DOMAIN: ysf.ROOT + "/",
+          IMROOT: function() {
+            var e = "/client/iframe";
+            if (util.isMobilePlatform() && window.__YSFMODILEWINTYPE__ === 2) {
+              e = "/client";
+            } else if (!util.isMobilePlatform() && window.__YSFWINTYPE__ == 1) {
+              e = "/client/iframe";
+            } else {
+              e = "/client";
+            }
+            var t = ysf.ROOT + e;
+            return t;
+          }(),
+          RESROOT: ysf.ROOT + "/sdk/",
+          CDNROOT: "//res.qiyukf.net/sdk/",
+          INVITE_TPYE: "layer"
+        }, (function(e, t) {
+          ysf[e] = t;
+        }));
+      };
+      ysf.buildProxy = J;
+      (function() {
+        ysf.initData();
+        N();
+        ysf.PAGEID = x();
+        window.__YSFAPPPATH__ = "/sdk/";
+        for (var e = 0; e < _.length; e++) {
+          try {
+            var t = _[e], i = t[0], o = Array.prototype.slice.call(t, 1);
+            fe(i, o);
+          } catch (e) {
+            util.consoleWarn(e);
+          }
+        }
+      })();
+    }
+  })();
+})();

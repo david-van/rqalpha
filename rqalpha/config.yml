@@ -7,7 +7,7 @@ whitelist: [base, extra, validator, mod]
 
 base:
   # 数据源所存储的文件路径
-  data_bundle_path: ~
+  data_bundle_path: D:\datas\bundle
   # 启动的策略文件路径
   strategy_file: strategy.py
   # 策略源代码
