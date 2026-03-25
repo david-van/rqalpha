@@ -18,7 +18,6 @@ from scipy.spatial.distance import squareform
 from collections import defaultdict
 
 from rqalpha.apis import *
-from my_mod.rqalpha_mod_extend_api import *
 
 # -------------------- 配置区域 (Initial Configuration) --------------------
 CONFIG = {

@@ -31,7 +31,6 @@ class ExtendAPIJukuanMod(AbstractMod):
                                         EXECUTION_PHASE.AFTER_TRADING,
                                         EXECUTION_PHASE.SCHEDULED)
         def get_all_securities(
-                self,
                 types: Union[str, List[str]] = 'stock',
                 date: Optional[Union[str, datetime]] = None
         ) -> pd.DataFrame:
