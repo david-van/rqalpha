@@ -3,10 +3,8 @@
 # @Date    : 2026/3/22 22:06
 # @Author  : david_van
 # @Desc    :
-
 # from jqdata import *
 # from jqfactor import *
-# from rqalpha.apis.api_base import all_instruments
 import numpy as np
 import pandas as pd
 import datetime
@@ -14,17 +12,12 @@ import unicodedata
 import builtins
 import math
 import networkx as nx
-
 from sklearn.cluster import AffinityPropagation, DBSCAN
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import squareform
 from collections import defaultdict
 
 from rqalpha.apis import *
-# from typing import TYPE_CHECKING
-#
-# if TYPE_CHECKING:
-#     from my_strategy._type._typing_all import *
 
 # -------------------- 配置区域 (Initial Configuration) --------------------
 CONFIG = {
@@ -73,8 +66,7 @@ pd.set_option('display.width', None)
 pd.set_option('display.expand_frame_repr', False)
 
 today = datetime.date.today()
-yesterday = today - datetime.timedelta(days=30)
-
+yesterday = today - datetime.timedelta(days=1)
 def get_history_data(security_list, end_date, count, field="close"):
     if isinstance(security_list, str):
         security_list = [security_list]
@@ -118,7 +110,6 @@ def get_history_data(security_list, end_date, count, field="close"):
     except Exception as e:
         print(f"  [Error] get_history_data failed: {e}")
         return pd.DataFrame()
-
 def _width(s: str) -> int:
     """返回字符串在终端里真实占的列数"""
     return builtins.sum(2 if unicodedata.east_asian_width(ch) in 'FW' else 1 for ch in s)
@@ -151,7 +142,7 @@ def initial_etf_filter(target_date=None, verbose=True, config=CONFIG):
     if target_date is None:
         target_date = datetime.date.today()
 
-    df = all_instruments(["ETF"], date=target_date)
+    df = get_all_securities(["etf"], date=target_date)
 
     # 白名单/黑名单
     blacklist = config['black_list']
@@ -203,7 +194,6 @@ def initial_etf_filter(target_date=None, verbose=True, config=CONFIG):
     initial_list = df.index.tolist()
     if verbose: print(f"  -> Found {len(initial_list)} candidate ETFs.")
     return initial_list
-
 # -------------------- 2.1 AP 聚类筛选 (Affinity Propagation) --------------------------
 def ap_clustering_filter(etf_list, config, target_date=None, verbose=True):
     """
@@ -632,33 +622,6 @@ def init(context):
     print("Configuration:", config)
     print('-'*80)
 
-    candidates = initial_etf_filter(target_date=target_date)
-
-    # 2. 聚类选择
-    if config["clustering_method"] == "ap":
-        final_pool = ap_clustering_filter(candidates, config, target_date=date)
-        method_name = "Affinity Propagation"
-    elif config["clustering_method"] == "mst":
-        final_pool = mst_clustering_filter(candidates, config, target_date=date)
-        method_name = "Minimum Spanning Tree (MST)"
-    elif config["clustering_method"] == "dbscan":
-        final_pool = dbscan_clustering_filter(candidates, config, target_date=date)
-        method_name = "DBSCAN Clustering"
-    else:
-        final_pool = hierarchical_clustering_filter(candidates, config, target_date=date)
-        method_name = "Hierarchical Clustering"
-
-    print(f"{method_name} Complete. Pool Size: {len(final_pool)}")
-
-
-def test_aggregation(date=yesterday,**conf):
-    config = CONFIG.copy()
-    config.update(**conf)
-    print('-'*80)
-    print(f"Starting {config['clustering_method'].upper()}-Based ETF Pool Generation")
-    print("Configuration:", config)
-    print('-'*80)
-
     candidates = initial_etf_filter(target_date=date)
 
     # 2. 聚类选择
@@ -676,4 +639,5 @@ def test_aggregation(date=yesterday,**conf):
         method_name = "Hierarchical Clustering"
 
     print(f"{method_name} Complete. Pool Size: {len(final_pool)}")
+
 
