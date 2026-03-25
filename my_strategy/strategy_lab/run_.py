@@ -25,6 +25,12 @@ def main():
             "log_level": "info",
             "log_file": str(Path(__file__).with_name("backtest.log")),
         },
+        "mod": {
+            "rqalpha_mod_extend_api": {
+                "enabled": True,
+                "lib": "my_mod.rqalpha_mod_extend_api",
+            }
+        }
     }
 
     result = run_file(str(strategy_file), config=config)
