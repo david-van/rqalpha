@@ -24,4 +24,6 @@ rqalpha_test_coverage_report/
 .DS_Store
 rqalpha/_version.py
 
+*.log
+
 .claude/settings.local.json
