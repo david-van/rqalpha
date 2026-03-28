@@ -163,7 +163,8 @@ def initial_etf_filter(target_date=None, verbose=True, config=CONFIG):
 
     # 上市时间检查
     # Use target_date instead of yesterday
-    check_date = target_date - datetime.timedelta(days=1)
+    check_date = pd.Timestamp(target_date - datetime.timedelta(days=1))
+    # check_date = target_date - datetime.timedelta(days=1)
     df = df[((check_date - df["start_date"]).dt.days >= config["min_listing_days"]) & (df["end_date"] > check_date)]
 
     # ----------------------------------------------------
@@ -622,7 +623,7 @@ def init(context):
     print("Configuration:", config)
     print('-'*80)
 
-    candidates = initial_etf_filter(target_date=date)
+    candidates = initial_etf_filter(target_date=target_date)
 
     # 2. 聚类选择
     if config["clustering_method"] == "ap":
