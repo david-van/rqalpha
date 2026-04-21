@@ -397,8 +397,10 @@ class Instrument(metaclass=PropertyReprMeta):
     @cached_property
     def order_step_size(self):
         # 下单递进股数
-        if self.board_type == "KSH" or self.board_type == "BJS":
-            return 1
+        if self.type == INSTRUMENT_TYPE.CS:
+            # 对于其他资产类型 instrument 中（如可转债）可能没有 board_type 字段
+            if self.board_type == "KSH" or self.board_type == "BJS":
+                return 1
         return self.round_lot
 
     def during_call_auction(self, dt):
@@ -445,7 +447,7 @@ class Instrument(metaclass=PropertyReprMeta):
         # type: () -> float
         if self.type in (INSTRUMENT_TYPE.CS, INSTRUMENT_TYPE.INDX):
             return 0.01
-        elif self.type in ("ETF", "LOF"):
+        elif self.type in ("ETF", "LOF", "REITs"):
             return 0.001
         elif self.type == INSTRUMENT_TYPE.FUTURE:
             return self._futures_tick_size_getter(self)

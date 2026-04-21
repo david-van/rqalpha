@@ -319,7 +319,7 @@ def order_lots(
 
 
 ORDER_TARGET_PORTFOLIO_SUPPORTED_INS_TYPES = {
-    INSTRUMENT_TYPE.CS, INSTRUMENT_TYPE.ETF, INSTRUMENT_TYPE.LOF, INSTRUMENT_TYPE.INDX, INSTRUMENT_TYPE.CONVERTIBLE
+    INSTRUMENT_TYPE.CS, INSTRUMENT_TYPE.ETF, INSTRUMENT_TYPE.LOF, INSTRUMENT_TYPE.INDX, INSTRUMENT_TYPE.CONVERTIBLE, INSTRUMENT_TYPE.REITs
 }
 
 
@@ -384,7 +384,7 @@ def order_target_portfolio(
             ).format(id_or_ins, type(id_or_ins)))
         if ins.type not in ORDER_TARGET_PORTFOLIO_SUPPORTED_INS_TYPES:
             raise RQInvalidArgument(_(
-                "function order_target_portfolio: invalid instrument type, excepted CS/ETF/LOF/INDX, got {}"
+                "function order_target_portfolio: invalid instrument type, excepted CS/ETF/LOF/INDX/Convertible/REITs, got {}"
             ).format(ins.order_book_id))
         order_book_id = ins.order_book_id
         last_price = env.data_proxy.get_last_price(order_book_id)

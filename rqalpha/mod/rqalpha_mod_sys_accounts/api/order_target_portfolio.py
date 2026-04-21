@@ -28,6 +28,7 @@ from rqalpha.utils.arg_checker import assure_active_instrument
 from rqalpha.utils.exception import RQApiNotSupportedError, RQInvalidArgument
 from rqalpha.utils.functools import lru_cache
 from rqalpha.utils.i18n import gettext as _, lazy_gettext
+from rqalpha.utils.price_limits import reaches_limit_down_vectorized, reaches_limit_up_vectorized
 
 
 class AdjustingResult(NamedTuple):
@@ -72,6 +73,15 @@ class DenialReason(CommentedEnum):
     closable_exceeded = 'closable_exceeded', lazy_gettext('Order creation failed: insufficient closable position')
 
 
+SUPPORTED_INSTRUMENT_TYPES = {
+    INSTRUMENT_TYPE.CS,
+    INSTRUMENT_TYPE.CONVERTIBLE,
+    INSTRUMENT_TYPE.ETF,
+    INSTRUMENT_TYPE.LOF,
+    INSTRUMENT_TYPE.REITs,
+}
+
+
 class OrderTargetPortfolio:
     def __init__(
         self,
@@ -101,10 +111,11 @@ class OrderTargetPortfolio:
 
         instruments = env.data_proxy.get_active_instruments(index, env.trading_dt)
         for i in instruments.values():
-            if i.type != INSTRUMENT_TYPE.CS:
+            if i.type not in SUPPORTED_INSTRUMENT_TYPES:
                 raise RQApiNotSupportedError(_('instrument type {} is not supported').format(i.type))
 
         self._market = Series({i.order_book_id: i.market for i in instruments.values()}, dtype='object')
+        self._tick_sizes = Series({i: env.data_proxy.get_tick_size(i) for i in index}, dtype=float)
         self._min_qty = Series(
             {i.order_book_id: i.min_order_quantity for i in instruments.values()},
             dtype='int64',
@@ -136,25 +147,19 @@ class OrderTargetPortfolio:
             else:
                 prev_date = env.data_proxy.get_previous_trading_date(env.trading_dt)
                 for order_book_id in index:
-                    bars = env.data_proxy.history_bars(order_book_id, 1, '1d', ['close'], prev_date)
-                    if bars is None:
+                    bar = env.data_proxy.get_bar(order_book_id, prev_date, '1d')
+                    if bar.isnan:
                         raise RuntimeError('missing valuation prices: {}'.format(order_book_id))
-                    self._prices.loc[order_book_id, 'last'] = bars['close'][0]
+                    self._prices.loc[order_book_id, 'last'] = bar.close
         elif phase == EXECUTION_PHASE.ON_BAR:
             if env.config.base.frequency == '1d':
                 # TODO：根据算法时间选择最近的分钟线作为估值
                 # 当前先选择开盘价
                 for order_book_id in index:
-                    bars = env.data_proxy.history_bars(
-                        order_book_id,
-                        1,
-                        '1d',
-                        ['open', 'limit_up', 'limit_down'],
-                        env.trading_dt,
-                    )
-                    if bars is None:
+                    bar = env.data_proxy.get_bar(order_book_id, env.trading_dt, '1d')
+                    if bar.isnan:
                         raise RuntimeError('missing valuation prices: {}'.format(order_book_id))
-                    self._prices.loc[order_book_id] = list(bars[0])
+                    self._prices.loc[order_book_id] = [bar.open, bar.limit_up, bar.limit_down]
                 if valuation_prices is not None:
                     self._prices['last'] = valuation_prices
             elif env.config.base.frequency == '1m':
@@ -212,8 +217,8 @@ class OrderTargetPortfolio:
         denials[DenialReason.suspended_sell] = (diff < 0) & self._suspended
         denials[DenialReason.no_price] = prices.isna() & (diff != 0)
 
-        limit_up = ~(limit_up.isna()) & (prices >= limit_up)
-        limit_down = ~(limit_down.isna()) & (prices <= limit_down)
+        limit_up = reaches_limit_up_vectorized(prices, limit_up, self._tick_sizes)
+        limit_down = reaches_limit_down_vectorized(prices, limit_down, self._tick_sizes)
         if direction == POSITION_DIRECTION.LONG:
             # 涨停不能开、跌停不能平
             limit_buy = (diff > 0) & limit_up
@@ -303,6 +308,7 @@ class OrderTargetPortfolio:
             last_proportion_diff = proportion_diff
             safety -= min(max(proportion_diff / 10, 0.0001), 0.002)
         return AdjustingResult(adjustments=last_diff, denials=self._format_denials(last_denials))
+
 
 @export_as_api
 @ExecutionContext.enforce_phase(
