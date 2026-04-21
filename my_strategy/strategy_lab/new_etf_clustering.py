@@ -71,45 +71,40 @@ def get_history_data(security_list, end_date, count, field="close"):
     if isinstance(security_list, str):
         security_list = [security_list]
 
-    try:
-        df = get_price(list(security_list), end_date=end_date, count=count,
-                       frequency='daily', fields=[field], panel=False)
+    df = get_price(list(security_list), end_date=end_date, count=count,
+                   frequency='daily', fields=[field], panel=False)
 
-        if df.empty:
-            return pd.DataFrame()
+    if df.empty:
+        return pd.DataFrame()
 
-        if 'code' in df.columns:
-            index_col = 'time' if 'time' in df.columns else 'date' if 'date' in df.columns else None
+    if 'code' in df.columns:
+        index_col = 'time' if 'time' in df.columns else 'date' if 'date' in df.columns else None
 
-            if index_col:
-                # Pivot to Index=Date, Columns=Code
-                return df.pivot(index=index_col, columns='code', values=field)
-            else:
-                return df.pivot(columns='code', values=field)
+        if index_col:
+            # Pivot to Index=Date, Columns=Code
+            return df.pivot(index=index_col, columns='code', values=field)
+        else:
+            return df.pivot(columns='code', values=field)
 
-        if isinstance(df.index, (pd.DatetimeIndex, pd.PeriodIndex)) or (len(df) > 0 and isinstance(df.index[0], (datetime.date, datetime.datetime, pd.Timestamp))):
-            if len(security_list) == 1:
-                security_code = security_list[0]
-                if field in df.columns:
-                    return df[[field]].rename(columns={field: security_code})
+    if isinstance(df.index, (pd.DatetimeIndex, pd.PeriodIndex)) or (len(df) > 0 and isinstance(df.index[0], (datetime.date, datetime.datetime, pd.Timestamp))):
+        if len(security_list) == 1:
+            security_code = security_list[0]
+            if field in df.columns:
+                return df[[field]].rename(columns={field: security_code})
 
-            return df[field] # Fallback
+        return df[field] # Fallback
 
-        if getattr(df, "ndim", 2) == 3:
-            return df[field]
-
-        if isinstance(df.index, pd.MultiIndex):
-            unstacked = df.unstack(level=1)
-            if field in unstacked.columns:
-                return unstacked[field]
-            if field in unstacked.columns.get_level_values(0):
-                return unstacked.xs(field, axis=1, level=0, drop_level=True)
-            return unstacked
+    if getattr(df, "ndim", 2) == 3:
         return df[field]
 
-    except Exception as e:
-        print(f"  [Error] get_history_data failed: {e}")
-        return pd.DataFrame()
+    if isinstance(df.index, pd.MultiIndex):
+        unstacked = df.unstack(level=1)
+        if field in unstacked.columns:
+            return unstacked[field]
+        if field in unstacked.columns.get_level_values(0):
+            return unstacked.xs(field, axis=1, level=0, drop_level=True)
+        return unstacked
+    return df[field]
 def _width(s: str) -> int:
     """返回字符串在终端里真实占的列数"""
     return builtins.sum(2 if unicodedata.east_asian_width(ch) in 'FW' else 1 for ch in s)
