@@ -33,6 +33,11 @@ trades = result["trades"]
 print(trades)
 result["trades"].to_csv("trades.csv", encoding="utf-8-sig")
 
+# ---- 查看交易记录 ----
+portfolio = result["portfolio"]
+print(portfolio)
+result["portfolio"].to_csv("portfolio.csv", encoding="utf-8-sig")
+
 # ---- 查看持仓记录 ----
 positions = result["stock_positions"]
 print(positions)

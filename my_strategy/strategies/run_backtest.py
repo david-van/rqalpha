@@ -12,10 +12,10 @@ def main():
     config = {
         "base": {
             "strategy_file": str(strategy_file),
-            "data_bundle_path": r"D:\code\python\data",
-            "start_date": "2018-01-01",
-            "end_date": "2026-01-01",
-            "frequency": "1m",
+            "data_bundle_path": r"D:\datas\bundle",
+            "start_date": "2026-01-01",
+            "end_date": "2026-03-01",
+            "frequency": "1d",
 
             "slippage": '0.0',
             "accounts": {
@@ -52,6 +52,7 @@ def main():
 
     result = run_file(str(strategy_file), config=config)
     # print(result)
+    # result["trades"].to_csv("trades.csv", encoding="utf-8-sig")
     return result
     # return run_file(str(strategy_file), config=config)
 
