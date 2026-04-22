@@ -20,31 +20,58 @@ PLATFORM = 'rqalpha'   # 可选: 'rqalpha' | 'joinquant' | 'ptrade'
 
 
 # ============================================================
-# 【平台适配层】—— 所有平台相关 API 只出现在这个类里
+# 【平台适配层】—— 修复版
 # ============================================================
+
+# 在模块顶部按平台做一次性导入（RQAlpha 才 import，聚宽/PTrade 用全局注入）
+if PLATFORM == 'rqalpha':
+    from rqalpha.api import (
+        history_bars as _rq_history_bars,
+        order_target_value as _rq_order_target_value,
+        logger as _rq_logger,
+        scheduler as _rq_scheduler,
+    )
+    from rqalpha.mod.rqalpha_mod_sys_scheduler.scheduler import physical_time as _rq_physical_time
+
+
 class PlatformAdapter:
-    """
-    屏蔽各平台 API 差异。策略代码只调用本类方法，不直接调用平台函数。
-    """
+    """屏蔽各平台 API 差异"""
 
     # ---------- 数据获取 ----------
     @staticmethod
     def get_close(code, n):
         """获取最近 n 日前复权收盘价，返回 numpy 1-D array"""
         if PLATFORM == 'rqalpha':
-            from rqalpha.api import history_bars
-            arr = history_bars(code, n, '1d', 'close', adjust_type='pre')
+            arr = _rq_history_bars(code, n, '1d', 'close', adjust_type='pre')
             return np.asarray(arr) if arr is not None else None
 
         elif PLATFORM == 'joinquant':
-            # 聚宽：attribute_history
-            arr = attribute_history(code, n, '1d', ['close'], df=False, fq='pre')['close']  # noqa
-            return np.asarray(arr)
+            # 聚宽平台：attribute_history 由平台注入为全局函数
+            fn = globals().get('attribute_history')
+            data = fn(code, n, '1d', ['close'], df=False, fq='pre')
+            return np.asarray(data['close']) if data else None
 
         elif PLATFORM == 'ptrade':
-            # PTrade：get_history
-            df = get_history(n, '1d', 'close', code, fq='pre', include=False)  # noqa
-            return np.asarray(df[code].values)
+            # PTrade：get_history 由平台注入为全局函数
+            fn = globals().get('get_history')
+            if fn is None:
+                return None
+            try:
+                df = fn(n, '1d', 'close', code, fq='pre', include=False)
+                if df is None or len(df) == 0:
+                    return None
+                # PTrade 的 get_history 返回的 DataFrame 列名就是 code
+                if code in df.columns:
+                    return np.asarray(df[code].values)
+                # 有些版本返回单列 'close'
+                if 'close' in df.columns:
+                    return np.asarray(df['close'].values)
+                # 兜底：取第一列
+                return np.asarray(df.iloc[:, 0].values)
+            except Exception as e:
+                # 让调用方知道异常原因更清楚
+                PlatformAdapter.log_warn(f'get_history 失败 {code}: {type(e).__name__}: {e}')
+                return None
 
     # ---------- 账户查询 ----------
     @staticmethod
@@ -70,54 +97,60 @@ class PlatformAdapter:
 
     @staticmethod
     def get_holdings(context):
-        """返回当前持仓（数量>0）的代码列表"""
         return [c for c in context.portfolio.positions
                 if PlatformAdapter.get_position_qty(context, c) > 0]
 
     # ---------- 下单 ----------
     @staticmethod
     def order_value(code, value):
-        """按目标金额调仓，返回是否成功"""
         if PLATFORM == 'rqalpha':
-            from rqalpha.api import order_target_value
-            return order_target_value(code, value) is not None
-        elif PLATFORM == 'joinquant':
-            return order_target_value(code, value) is not None  # noqa
-        elif PLATFORM == 'ptrade':
-            return order_target_value(code, value) is not None  # noqa
+            return _rq_order_target_value(code, value) is not None
+        else:
+            # 聚宽 / PTrade：order_target_value 是平台注入的全局函数
+            fn = globals().get('order_target_value')
+            if fn is None:
+                return False
+            try:
+                return fn(code, value) is not None
+            except Exception as e:
+                PlatformAdapter.log_warn(f'order_target_value 失败 {code}: {e}')
+                return False
 
     # ---------- 日志 ----------
     @staticmethod
     def log_info(msg):
         if PLATFORM == 'rqalpha':
-            from rqalpha.api import logger
-            logger.info(msg)
+            _rq_logger.info(msg)
         else:
-            log.info(msg)  # noqa  (聚宽/PTrade)
+            lg = globals().get('log')
+            if lg: lg.info(msg)
+            else:  print(msg)
 
     @staticmethod
     def log_warn(msg):
         if PLATFORM == 'rqalpha':
-            from rqalpha.api import logger
-            logger.warn(msg)
+            _rq_logger.warn(msg)
         else:
-            log.warn(msg)  # noqa
+            lg = globals().get('log')
+            if lg: lg.warn(msg)
+            else:  print('[WARN]', msg)
 
     # ---------- 调度注册 ----------
     @staticmethod
     def register_schedule(sell_fn, buy_fn):
         if PLATFORM == 'rqalpha':
-            from rqalpha.api import scheduler
-            from rqalpha.mod.rqalpha_mod_sys_scheduler.scheduler import physical_time
-            scheduler.run_daily(sell_fn, time_rule=physical_time(hour=9, minute=35))
-            scheduler.run_daily(buy_fn,  time_rule=physical_time(hour=9, minute=37))
+            _rq_scheduler.run_daily(sell_fn, time_rule=_rq_physical_time(hour=9, minute=35))
+            _rq_scheduler.run_daily(buy_fn,  time_rule=_rq_physical_time(hour=9, minute=37))
         elif PLATFORM == 'joinquant':
-            run_daily(sell_fn, time='09:35')  # noqa
-            run_daily(buy_fn,  time='09:37')  # noqa
+            fn = globals().get('run_daily')
+            fn(sell_fn, time='09:35')
+            fn(buy_fn,  time='09:37')
         elif PLATFORM == 'ptrade':
-            # PTrade 的 run_daily 需要在 initialize 中传 context
-            run_daily(_ctx_holder['ctx'], sell_fn, time='9:35')  # noqa
-            run_daily(_ctx_holder['ctx'], buy_fn,  time='9:37')  # noqa
+            fn = globals().get('run_daily')
+            ctx = _ctx_holder['ctx']
+            # PTrade 的 run_daily 签名：run_daily(context, func, time)
+            fn(ctx, sell_fn, time='9:35')
+            fn(ctx, buy_fn,  time='9:37')
 
 
 # ============================================================

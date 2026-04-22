@@ -26,11 +26,11 @@ def make_base_config(tag: str):
         "base": {
             "strategy_file": STRATEGY_FILE,
             "data_bundle_path": r"D:\datas\bundle",
-            "start_date": "2026-01-01",
-            "end_date":   "2026-04-01",
+            "start_date": "2018-01-01",
+            "end_date":   "2026-01-01",
             "frequency":  "1d",
             "slippage":   '0.0',
-            "accounts":   {"stock": 100000},
+            "accounts":   {"stock": 10000},
         },
         "mod": {
             "sys_transaction_cost": {
