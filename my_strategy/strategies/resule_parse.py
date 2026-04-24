@@ -7,37 +7,48 @@ import pickle
 import pandas as pd
 
 # 读取 pkl 文件
-with open("result.pkl", "rb") as f:
+import pickle
+from pathlib import Path
+
+# ---- 配置：只需改这一处 ----
+pkl_path = Path("batch_results/no_min_score.pkl")
+
+with open(pkl_path, "rb") as f:
     result = pickle.load(f)
+
+# 自动派生输出路径，例如：
+#   batch_results/no_min_score.pkl
+#   → batch_results/no_min_score_trades.csv
+#   → batch_results/no_min_score_portfolio.csv
+out_dir = pkl_path.parent          # batch_results
+stem    = pkl_path.stem            # no_min_score
+
+trades_csv    = out_dir / f"{stem}_trades.csv"
+portfolio_csv = out_dir / f"{stem}_portfolio.csv"
 
 # ---- 查看回测摘要 ----
 summary = result["summary"]
 for key, value in summary.items():
     print(f"{key}: {value}")
 
-# 常见字段：
-# total_returns:        总收益率
-# annualized_returns:   年化收益率
-# max_drawdown:         最大回撤
-# sharpe:               夏普比率
-# volatility:           波动率
-
 # ---- 查看每日净值曲线 ----
 portfolio = result["portfolio"]
 print(portfolio.head())
-# 可以画图
-portfolio["unit_net_value"].plot(title="策略净值曲线")
+portfolio["unit_net_value"].plot(title=f"策略净值曲线 ({stem})")
 
-# ---- 查看交易记录 ----
+# ---- 导出交易记录 ----
 trades = result["trades"]
 print(trades)
-result["trades"].to_csv("trades.csv", encoding="utf-8-sig")
+trades.to_csv(trades_csv, encoding="utf-8-sig")
+print(f"交易记录已保存: {trades_csv}")
 
-# ---- 查看交易记录 ----
+# ---- 导出组合记录 ----
 portfolio = result["portfolio"]
 print(portfolio)
-result["portfolio"].to_csv("portfolio.csv", encoding="utf-8-sig")
+portfolio.to_csv(portfolio_csv, encoding="utf-8-sig")
+print(f"组合记录已保存: {portfolio_csv}")
 
 # ---- 查看持仓记录 ----
 positions = result["stock_positions"]
 print(positions)
+

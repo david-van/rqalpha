@@ -16,8 +16,7 @@ from abc import ABC, abstractmethod
 # ============================================================
 # 【平台标识】迁移时改这里
 # ============================================================
-PLATFORM = 'rqalpha'   # 可选: 'rqalpha' | 'joinquant' | 'ptrade'
-
+PLATFORM = 'rqalpha'  # 可选: 'rqalpha' | 'joinquant' | 'ptrade'
 
 # ============================================================
 # 【平台适配层】—— 修复版
@@ -123,8 +122,10 @@ class PlatformAdapter:
             _rq_logger.info(msg)
         else:
             lg = globals().get('log')
-            if lg: lg.info(msg)
-            else:  print(msg)
+            if lg:
+                lg.info(msg)
+            else:
+                print(msg)
 
     @staticmethod
     def log_warn(msg):
@@ -132,25 +133,27 @@ class PlatformAdapter:
             _rq_logger.warn(msg)
         else:
             lg = globals().get('log')
-            if lg: lg.warn(msg)
-            else:  print('[WARN]', msg)
+            if lg:
+                lg.warn(msg)
+            else:
+                print('[WARN]', msg)
 
     # ---------- 调度注册 ----------
     @staticmethod
     def register_schedule(sell_fn, buy_fn):
         if PLATFORM == 'rqalpha':
             _rq_scheduler.run_daily(sell_fn, time_rule=_rq_physical_time(hour=9, minute=35))
-            _rq_scheduler.run_daily(buy_fn,  time_rule=_rq_physical_time(hour=9, minute=37))
+            _rq_scheduler.run_daily(buy_fn, time_rule=_rq_physical_time(hour=9, minute=37))
         elif PLATFORM == 'joinquant':
             fn = globals().get('run_daily')
             fn(sell_fn, time='09:35')
-            fn(buy_fn,  time='09:37')
+            fn(buy_fn, time='09:37')
         elif PLATFORM == 'ptrade':
             fn = globals().get('run_daily')
             ctx = _ctx_holder['ctx']
             # PTrade 的 run_daily 签名：run_daily(context, func, time)
             fn(ctx, sell_fn, time='9:35')
-            fn(ctx, buy_fn,  time='9:37')
+            fn(ctx, buy_fn, time='9:37')
 
 
 # ============================================================
@@ -158,9 +161,11 @@ class PlatformAdapter:
 # ============================================================
 class BaseScorer(ABC):
     name = 'base'
+
     def __init__(self, weight=1.0, **kw):
         self.weight = weight
         self.params = kw
+
     @abstractmethod
     def score(self, context, etf_pool) -> dict: ...
 
@@ -168,6 +173,7 @@ class BaseScorer(ABC):
 class MomentumR2Scorer(BaseScorer):
     """年化收益 × R² 动量打分"""
     name = 'momentum_r2'
+
     def __init__(self, weight=1.0, m_days=25):
         super().__init__(weight=weight)
         self.m_days = m_days
@@ -178,11 +184,13 @@ class MomentumR2Scorer(BaseScorer):
             try:
                 close = PlatformAdapter.get_close(etf, self.m_days)
                 if close is None or len(close) < self.m_days:
-                    out[etf] = float('-inf'); continue
-                y = np.log(close); x = np.arange(len(y))
+                    out[etf] = float('-inf');
+                    continue
+                y = np.log(close);
+                x = np.arange(len(y))
                 slope, intercept = np.polyfit(x, y, 1)
                 ann = math.pow(math.exp(slope), 250) - 1
-                r2 = 1 - np.sum((y - (slope*x+intercept))**2) / ((len(y)-1)*np.var(y, ddof=1))
+                r2 = 1 - np.sum((y - (slope * x + intercept)) ** 2) / ((len(y) - 1) * np.var(y, ddof=1))
                 out[etf] = ann * r2
             except Exception as e:
                 PlatformAdapter.log_warn(f'{self.name} {etf} 异常: {e}')
@@ -193,6 +201,7 @@ class MomentumR2Scorer(BaseScorer):
 class SimpleMomentumScorer(BaseScorer):
     """简单 N 日涨幅"""
     name = 'momentum_simple'
+
     def __init__(self, weight=1.0, m_days=20):
         super().__init__(weight=weight)
         self.m_days = m_days
@@ -213,9 +222,11 @@ class SimpleMomentumScorer(BaseScorer):
 # ============================================================
 class BaseFilter(ABC):
     name = 'base'
+
     def __init__(self, enabled=True, **kw):
         self.enabled = enabled
         self.params = kw
+
     @abstractmethod
     def filter(self, context, ranked_list, scores) -> list: ...
 
@@ -223,9 +234,11 @@ class BaseFilter(ABC):
 class MinScoreFilter(BaseFilter):
     """分数阈值过滤：低于阈值不买（空仓保护）"""
     name = 'min_score'
+
     def __init__(self, enabled=True, threshold=0.0):
         super().__init__(enabled=enabled)
         self.threshold = threshold
+
     def filter(self, context, ranked_list, scores):
         if not self.enabled: return ranked_list
         return [e for e in ranked_list if scores.get(e, float('-inf')) > self.threshold]
@@ -234,6 +247,7 @@ class MinScoreFilter(BaseFilter):
 class MATrendFilter(BaseFilter):
     """均线趋势过滤：价格必须 > MA(N) 才允许买入"""
     name = 'ma_trend'
+
     def __init__(self, enabled=True, ma_period=20):
         super().__init__(enabled=enabled)
         self.ma_period = ma_period
@@ -255,6 +269,7 @@ class MATrendFilter(BaseFilter):
 class VolatilityFilter(BaseFilter):
     """波动率过滤：年化波动率超过上限不买"""
     name = 'volatility'
+
     def __init__(self, enabled=True, n_days=20, max_vol=0.5):
         super().__init__(enabled=enabled)
         self.n_days = n_days
@@ -331,9 +346,9 @@ class StrategyEngine:
 # RQAlpha / 聚宽 : .XSHG / .XSHE
 # PTrade         : .SS   / .SZ
 ETF_POOL_MAP = {
-    'rqalpha':   ['518880.XSHG', '513100.XSHG', '159915.XSHE', '510180.XSHG'],
+    'rqalpha': ['518880.XSHG', '513100.XSHG', '159915.XSHE', '510180.XSHG'],
     'joinquant': ['518880.XSHG', '513100.XSHG', '159915.XSHE', '510180.XSHG'],
-    'ptrade':    ['518880.SS',   '513100.SS',   '159915.SZ',   '510180.SS'],
+    'ptrade': ['518880.SS', '513100.SS', '159915.SZ', '510180.SS'],
 }
 
 # ============================================================
@@ -345,9 +360,10 @@ DEFAULT_PARAMS = {
     'scorer_momentum_r2': {'enabled': True, 'weight': 1.0, 'm_days': 25},
     'scorer_momentum_simple': {'enabled': False, 'weight': 0.3, 'm_days': 20},
     'filter_min_score': {'enabled': False, 'threshold': 0.0},
-    'filter_ma_trend':  {'enabled': False, 'ma_period': 20},
-    'filter_volatility':{'enabled': False, 'n_days': 20, 'max_vol': 0.5},
+    'filter_ma_trend': {'enabled': False, 'ma_period': 20},
+    'filter_volatility': {'enabled': False, 'n_days': 20, 'max_vol': 0.5},
 }
+
 
 def build_components(params):
     """根据参数字典构建 scorers / filters 列表"""
@@ -365,6 +381,7 @@ def build_components(params):
         VolatilityFilter(**params['filter_volatility']),
     ]
     return scorers, filters, params['top_n']
+
 
 # ============================================================
 # 【全局状态】—— PTrade 需要 context 做调度，用个小 holder 过渡
@@ -407,14 +424,25 @@ def buy_trade(context, bar_dict=None):
 # ============================================================
 # 【平台入口】—— 三个平台通用的 init / handle_bar
 # ============================================================
+
+def _to_plain_dict(obj):
+    """递归将 RqAttrDict 转为普通 dict"""
+    if hasattr(obj, 'items'):
+        return {k: _to_plain_dict(v) for k, v in obj.items()}
+    return obj
+
+
 def _common_init(context):
     # 读取外部注入的参数（批量回测用），没有就用默认值
     params = DEFAULT_PARAMS.copy()
+    # ⚠️ 深拷贝嵌套 dict，避免污染 DEFAULT_PARAMS
+    params = {k: (v.copy() if isinstance(v, dict) else v) for k, v in params.items()}
+
     injected = getattr(context, 'strategy_params', None)
     if injected:
-        # 深合并：逐键更新
+        injected = _to_plain_dict(injected)  # ✅ 关键：转成普通 dict
         for k, v in injected.items():
-            if isinstance(v, dict) and k in params:
+            if isinstance(v, dict) and k in params and isinstance(params[k], dict):
                 params[k].update(v)
             else:
                 params[k] = v
@@ -435,9 +463,9 @@ def _common_init(context):
 def init(context):
     _common_init(context)
 
+
 def handle_bar(context, bar_dict):
     pass
-
 
 # ---------- 聚宽入口（同名函数，平台切换时各自生效）----------
 # 聚宽要求的入口是 `initialize(context)` —— 取消下方注释即可
