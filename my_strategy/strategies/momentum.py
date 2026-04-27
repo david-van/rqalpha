@@ -446,8 +446,35 @@ def _common_init(context):
                 params[k].update(v)
             else:
                 params[k] = v
-
-    context.etf_pool = ETF_POOL_MAP[PLATFORM]
+    # ========== 关键修改：etf_pool 支持三种覆盖方式 ==========
+    base_pool = list(ETF_POOL_MAP[PLATFORM])  # 拷贝一份，避免污染原始配置
+    # 方式1：完整替换整个池子
+    if 'etf_pool' in params:
+        base_pool = list(params['etf_pool'])
+        PlatformAdapter.log_info(f'[etf_pool] 完整替换为: {base_pool}')
+    # 方式2：单个替换 {"etf_replace": {"旧代码": "新代码", ...}}
+    if 'etf_replace' in params:
+        replace_map = params['etf_replace']
+        for old_code, new_code in replace_map.items():
+            if old_code in base_pool:
+                idx = base_pool.index(old_code)
+                base_pool[idx] = new_code
+                PlatformAdapter.log_info(f'[etf_pool] 替换: {old_code} -> {new_code}')
+            else:
+                PlatformAdapter.log_warn(f'[etf_pool] 替换失败: {old_code} 不在池中')
+    # 方式3：追加 / 移除
+    if 'etf_add' in params:
+        for code in params['etf_add']:
+            if code not in base_pool:
+                base_pool.append(code)
+                PlatformAdapter.log_info(f'[etf_pool] 追加: {code}')
+    if 'etf_remove' in params:
+        for code in params['etf_remove']:
+            if code in base_pool:
+                base_pool.remove(code)
+                PlatformAdapter.log_info(f'[etf_pool] 移除: {code}')
+    context.etf_pool = base_pool
+    # context.etf_pool = ETF_POOL_MAP[PLATFORM]
     context.target_list = []
     context.params = params
 
