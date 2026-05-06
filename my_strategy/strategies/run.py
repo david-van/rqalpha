@@ -64,6 +64,18 @@ EXPERIMENTS = [
     ("baseline", {
         # 全默认
     }),
+    ("switch_threshold_05", {
+        "switch_threshold":1.05
+    }),
+    ("switch_threshold_10", {
+        "switch_threshold":1.1
+    }),
+    ("switch_threshold_15", {
+        "switch_threshold":1.15
+    }),
+    ("switch_threshold_20", {
+        "switch_threshold":1.2
+    }),
     # ("no_min_score", {
     #     "filter_min_score": {"enabled": False, "threshold": 0.0},
     # }),

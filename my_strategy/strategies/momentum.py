@@ -296,10 +296,11 @@ class VolatilityFilter(BaseFilter):
 # 【策略引擎】—— 合成打分 + 过滤 + 选股
 # ============================================================
 class StrategyEngine:
-    def __init__(self, scorers, filters, top_n=1):
+    def __init__(self, scorers, filters, top_n=1, switch_threshold=1.0):
         self.scorers = scorers
         self.filters = filters
         self.top_n = top_n
+        self.switch_threshold = switch_threshold
 
     def _combine(self, context, etf_pool):
         """多打分器加权合成"""
@@ -316,7 +317,7 @@ class StrategyEngine:
                     all_scores[etf] += v * scorer.weight / total_w
         return all_scores, detail
 
-    def select(self, context, etf_pool):
+    def select(self, context, etf_pool, holdings=None):
         scores, detail = self._combine(context, etf_pool)
         ranked = sorted(scores.keys(), key=lambda e: scores[e], reverse=True)
 
@@ -335,7 +336,41 @@ class StrategyEngine:
             if before != ranked:
                 PlatformAdapter.log_info(f'过滤器[{f.name}]: {before} -> {ranked}')
 
-        return ranked[:self.top_n]
+        candidates = ranked[:self.top_n]
+
+        # --- 阈值切换逻辑 ---
+        # 仅当 top_n=1、持有 1 支、阈值 > 1.0 时生效
+        if (holdings and len(holdings) == 1
+                and self.top_n == 1 and self.switch_threshold > 1.0
+                and candidates):
+            held = holdings[0]
+            if held != candidates[0]:
+                # 持有标的不再是第1名，检查是否仍在过滤后的排名中
+                if held in ranked:
+                    held_score = scores.get(held, float('-inf'))
+                    new_score = scores.get(candidates[0], float('-inf'))
+                    threshold_score = held_score + abs(held_score) * (self.switch_threshold - 1)
+                    if (held_score != float('-inf') and new_score != float('-inf')
+                            and new_score <= threshold_score):
+                        margin = abs(held_score) * (self.switch_threshold - 1)
+                        PlatformAdapter.log_info(
+                            f'[阈值切换] 维持持仓 {held}(得分{held_score:.4f})，'
+                            f'新目标 {candidates[0]}(得分{new_score:.4f}) '
+                            f'未超过阈值 {held_score:.4f}+{margin:.4f}={threshold_score:.4f}'
+                        )
+                        candidates = [held]
+                    else:
+                        PlatformAdapter.log_info(
+                            f'[阈值切换] 触发切换: {held}(得分{held_score:.4f}) → '
+                            f'{candidates[0]}(得分{new_score:.4f})，'
+                            f'超过阈值 {threshold_score:.4f}'
+                        )
+                else:
+                    PlatformAdapter.log_info(
+                        f'[阈值切换] {held} 已被过滤器剔除，执行切换至 {candidates[0]}'
+                    )
+
+        return candidates
 
 
 # ============================================================
@@ -357,6 +392,7 @@ ETF_POOL_MAP = {
 
 DEFAULT_PARAMS = {
     'top_n': 1,
+    'switch_threshold': 1.0,   # 切换阈值系数，1.0=不启用；>1.0时新标的得分需超过持有标的得分×系数才切换
     'scorer_momentum_r2': {'enabled': True, 'weight': 1.0, 'm_days': 25},
     'scorer_momentum_simple': {'enabled': False, 'weight': 0.3, 'm_days': 20},
     'filter_min_score': {'enabled': False, 'threshold': 0.0},
@@ -380,7 +416,7 @@ def build_components(params):
         MATrendFilter(**params['filter_ma_trend']),
         VolatilityFilter(**params['filter_volatility']),
     ]
-    return scorers, filters, params['top_n']
+    return scorers, filters, params['top_n'], params.get('switch_threshold', 1.0)
 
 
 # ============================================================
@@ -394,8 +430,8 @@ _ctx_holder = {'ctx': None}
 # ============================================================
 def sell_trade(context, bar_dict=None):
     """9:35 计算排名，卖出非目标"""
-    context.target_list = context.engine.select(context, context.etf_pool)
     holdings = PlatformAdapter.get_holdings(context)
+    context.target_list = context.engine.select(context, context.etf_pool, holdings=holdings)
     for etf in holdings:
         if etf not in context.target_list:
             if PlatformAdapter.order_value(etf, 0):
@@ -478,8 +514,8 @@ def _common_init(context):
     context.target_list = []
     context.params = params
 
-    scorers, filters, top_n = build_components(params)
-    context.engine = StrategyEngine(scorers, filters, top_n=top_n)
+    scorers, filters, top_n, switch_threshold = build_components(params)
+    context.engine = StrategyEngine(scorers, filters, top_n=top_n, switch_threshold=switch_threshold)
 
     _ctx_holder['ctx'] = context
     PlatformAdapter.register_schedule(sell_trade, buy_trade)
