@@ -21,6 +21,7 @@ classifiers = [
 ]
 requires-python = ">=3.6"
 dependencies = [
+    'plotly >=5.0.0',
     'requests',
     'numpy < 2.0.0 ; python_version <= "3.11"',
     'numpy >=2.0.0 ; python_version >= "3.12"',

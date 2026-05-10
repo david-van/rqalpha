@@ -8,12 +8,12 @@ from rqalpha import run_file
 
 
 def main():
-    strategy_file = os.path.join(project_root, 'my_strategy/strategies/pt_核心资产轮动.py')
+    strategy_file = os.path.join(project_root, 'my_strategy/strategies/etf_pool.py')
     config = {
         "base": {
             "strategy_file": str(strategy_file),
             "data_bundle_path": r"D:\datas\bundle",
-            "start_date": "2026-01-01",
+            "start_date": "2016-01-01",
             "end_date": "2026-03-01",
             "frequency": "1d",
 
