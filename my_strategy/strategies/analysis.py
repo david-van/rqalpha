@@ -32,7 +32,7 @@ matplotlib.rcParams["axes.unicode_minus"] = False
 # ============================================================
 RESULT_DIR = Path(__file__).with_name("batch_results")
 # todo 配置自己需要分析的详细目录
-RESULT_DIR = RESULT_DIR.joinpath("mdays_switch_threshold")
+RESULT_DIR = RESULT_DIR.joinpath("decay_ratio")
 TRADING_DAYS_PER_YEAR = 250
 
 
@@ -329,10 +329,13 @@ def plot_curves_panel(results: dict, save_path: Path):
 # ============================================================
 def plot_sensitivity(results: dict, save_path: Path):
     """X轴=阈值参数值，Y轴多条线分别为收益、夏普、回撤、换手率"""
-    # 尝试从 tag 中提取 threshold 值
+    # 先检测扫描参数类型（用于 baseline 回归正确的默认值）
+    scan_param = _detect_scan_param(list(results.keys()))
+
+    # 提取 X 轴参数值
     pairs = []
     for tag, data in results.items():
-        th = _extract_threshold(tag)
+        th = _extract_threshold(tag, scan_param=scan_param)
         if th is not None:
             pairs.append((th, tag, data))
 
@@ -352,8 +355,12 @@ def plot_sensitivity(results: dict, save_path: Path):
     }
 
     # 自动判断扫描的是哪个参数，用于图表标题和 X 轴标签
-    has_mdays = any("mdays" in p[1] for p in pairs)
-    param_label = "m_days (回望天数)" if has_mdays else "阈值系数 (switch_threshold)"
+    if scan_param == "m":
+        param_label = "m_days (回望天数)"
+    elif scan_param == "r":
+        param_label = "decay_ratio (衰减权重比)"
+    else:
+        param_label = "阈值系数 (switch_threshold)"
 
     fig, axes = plt.subplots(2, 3, figsize=(16, 9))
     axes_flat = axes.flatten()
@@ -391,12 +398,13 @@ def plot_sensitivity(results: dict, save_path: Path):
 
 
 def _parse_tag(tag: str) -> dict:
-    """从 tag 名中解析参数值，返回 {'m_days': int, 'threshold': float}。
+    """从 tag 名中解析参数值，返回 {'m_days': int, 'threshold': float, 'decay_ratio': float}。
 
     支持的 tag 格式（来自 run.py 的 _make_tag）：
-      baseline          → m_days=25, threshold=1.0
+      baseline          → m_days=25, threshold=1.0, decay_ratio=1.0
       m28               → m_days=28, threshold=1.0
       t110              → m_days=25, threshold=1.10
+      r15               → m_days=25, threshold=1.0, decay_ratio=1.5
       m28_t110          → m_days=28, threshold=1.10
       mdays_28          → m_days=28, threshold=1.0   (旧格式兼容)
       switch_threshold_10 → m_days=25, threshold=1.10 (旧格式兼容)
@@ -404,6 +412,7 @@ def _parse_tag(tag: str) -> dict:
     import re
     m_days = 25       # 默认值
     threshold = 1.0   # 默认值
+    decay_ratio = 1.0 # 默认值
 
     # 新格式：m{DD} 或 m{DD}_t{TTT}
     # 用 (?<![a-z]) 和 (?!\d) 代替 \b，避免 _ 被当作单词字符导致边界失效
@@ -417,6 +426,11 @@ def _parse_tag(tag: str) -> dict:
     if m:
         threshold = int(m.group(1)) / 100.0
 
+    # 新格式：r{DD}（两位，如 r15 → 1.5, r20 → 2.0）
+    m = re.search(r"(?:^|_)r(\d{2})(?!\d)", tag)
+    if m:
+        decay_ratio = int(m.group(1)) / 10.0
+
     # 旧格式兼容：mdays_XX
     m = re.search(r"mdays[_](\d+)", tag)
     if m:
@@ -428,27 +442,51 @@ def _parse_tag(tag: str) -> dict:
         digits = m.group(1)
         threshold = float(digits) / 100 + 1.0 if len(digits) <= 2 else float(digits) / 100
 
-    return {"m_days": m_days, "threshold": threshold}
+    return {"m_days": m_days, "threshold": threshold, "decay_ratio": decay_ratio}
 
 
-def _extract_threshold(tag: str):
+def _extract_threshold(tag: str, scan_param: str = None):
     """单维敏感性图用：返回该 tag 的"主参数值"（用于 X 轴）。
-    二维场景（tag 同时含 m 和 t）返回 None，由 plot_grid_heatmap 处理。
+    多维场景（tag 同时含两个及以上维度）返回 None，由 plot_grid_heatmap 处理。
+
+    :param scan_param: 当前扫描的参数类型 'm'/'t'/'r'，用于 baseline 返回正确的默认值
     """
     p = _parse_tag(tag)
     import re
-    has_m = bool(re.search(r"\bm\d{2}\b", tag) or re.search(r"mdays[_]\d+", tag))
-    has_t = bool(re.search(r"\bt\d{3}\b", tag) or re.search(r"switch_threshold", tag))
+    has_m = bool(re.search(r"(?<![a-z])m\d{2}(?!\d)", tag) or re.search(r"mdays[_]\d+", tag))
+    has_t = bool(re.search(r"(?:^|_)t\d{3}(?!\d)", tag) or re.search(r"switch_threshold", tag))
+    has_r = bool(re.search(r"(?:^|_)r\d{2}(?!\d)", tag))
 
-    if has_m and has_t:
-        return None   # 二维点，不参与单维敏感性图
-    if has_m or tag.lower() == "baseline":
+    dims = sum([has_m, has_t, has_r])
+    if dims >= 2:
+        return None   # 多维点，不参与单维敏感性图
+    if has_r:
+        return p["decay_ratio"]
+    if has_m:
         return p["m_days"]
     if has_t:
         return p["threshold"]
     if tag.lower() == "baseline":
-        return p["m_days"]
+        if scan_param == "r":
+            return p["decay_ratio"]   # 1.0
+        elif scan_param == "t":
+            return p["threshold"]     # 1.0
+        else:
+            return p["m_days"]        # 25
     return None
+
+def _detect_scan_param(tags: list) -> str:
+    """从非 baseline 的 tag 列表中检测扫描参数类型"""
+    for tag in tags:
+        if tag == "baseline":
+            continue
+        if tag.startswith("r"):
+            return "r"
+        if tag.startswith("m"):
+            return "m"
+        if tag.startswith("t"):
+            return "t"
+    return "m"  # 默认
 
 
 # ============================================================

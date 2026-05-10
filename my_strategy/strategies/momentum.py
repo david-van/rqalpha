@@ -171,12 +171,17 @@ class BaseScorer(ABC):
 
 
 class MomentumR2Scorer(BaseScorer):
-    """年化收益 × R² 动量打分"""
+    """年化收益 × R² 动量打分（支持线性衰减加权回归）"""
     name = 'momentum_r2'
 
-    def __init__(self, weight=1.0, m_days=25):
+    def __init__(self, weight=1.0, m_days=25, decay_ratio=1.0):
+        """
+        :param m_days: 回看天数
+        :param decay_ratio: 加权回归的最新/最旧权重比，1.0=等权，2.0=最新权重是旧2倍
+        """
         super().__init__(weight=weight)
         self.m_days = m_days
+        self.decay_ratio = decay_ratio
 
     def score(self, context, etf_pool):
         out = {}
@@ -188,9 +193,20 @@ class MomentumR2Scorer(BaseScorer):
                     continue
                 y = np.log(close)
                 x = np.arange(len(y))
-                slope, intercept = np.polyfit(x, y, 1)
+
+                if self.decay_ratio > 1.0:
+                    w = np.linspace(1.0, self.decay_ratio, len(y))
+                    slope, intercept = np.polyfit(x, y, 1, w=w)
+                    y_pred = slope * x + intercept
+                    ss_res = np.sum(w * (y - y_pred) ** 2)
+                    y_mean = np.average(y, weights=w)
+                    ss_tot = np.sum(w * (y - y_mean) ** 2)
+                    r2 = 1 - ss_res / ss_tot if ss_tot != 0 else 0
+                else:
+                    slope, intercept = np.polyfit(x, y, 1)
+                    r2 = 1 - np.sum((y - (slope * x + intercept)) ** 2) / ((len(y) - 1) * np.var(y, ddof=1))
+
                 ann = math.pow(math.exp(slope), 250) - 1
-                r2 = 1 - np.sum((y - (slope * x + intercept)) ** 2) / ((len(y) - 1) * np.var(y, ddof=1))
                 out[etf] = ann * r2
             except Exception as e:
                 PlatformAdapter.log_warn(f'{self.name} {etf} 异常: {e}')
@@ -393,7 +409,7 @@ ETF_POOL_MAP = {
 DEFAULT_PARAMS = {
     'top_n': 1,
     'switch_threshold': 1.0,   # 切换阈值系数，1.0=不启用；>1.0时新标的得分需超过持有标的得分×系数才切换
-    'scorer_momentum_r2': {'enabled': True, 'weight': 1.0, 'm_days': 25},
+    'scorer_momentum_r2': {'enabled': True, 'weight': 1.0, 'm_days': 25, 'decay_ratio': 1.0},
     'scorer_momentum_simple': {'enabled': False, 'weight': 0.3, 'm_days': 20},
     'filter_min_score': {'enabled': False, 'threshold': 0.0},
     'filter_ma_trend': {'enabled': False, 'ma_period': 20},
@@ -406,7 +422,7 @@ def build_components(params):
     scorers = []
     if params['scorer_momentum_r2']['enabled']:
         p = params['scorer_momentum_r2']
-        scorers.append(MomentumR2Scorer(weight=p['weight'], m_days=p['m_days']))
+        scorers.append(MomentumR2Scorer(weight=p['weight'], m_days=p['m_days'], decay_ratio=p.get('decay_ratio', 1.0)))
     if params['scorer_momentum_simple']['enabled']:
         p = params['scorer_momentum_simple']
         scorers.append(SimpleMomentumScorer(weight=p['weight'], m_days=p['m_days']))

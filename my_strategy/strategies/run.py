@@ -17,7 +17,7 @@ from rqalpha import run_file
 # ==================== 基础配置 ====================
 STRATEGY_FILE = os.path.join(project_root, 'my_strategy/strategies/momentum.py')
 RESULT_DIR = Path(__file__).with_name('batch_results')
-RESULT_DIR = RESULT_DIR.joinpath("mdays_switch_threshold")
+RESULT_DIR = RESULT_DIR.joinpath("decay_ratio")
 RESULT_DIR.mkdir(exist_ok=True)
 
 
@@ -62,45 +62,67 @@ def make_base_config(tag: str):
 # ==================== 定义实验组 ====================
 # 每个实验 = (tag, 参数覆盖字典)
 #
-# 【模式说明】切换下方三种模式之一，注释掉其余两种：
+# 【模式说明】切换下方模式之一，注释掉其余：
 #
-#   模式A — 单维扫描 m_days（参数敏感性）
-#   模式B — 单维扫描 switch_threshold（阈值敏感性）
-#   模式C — 二维网格搜索 m_days × switch_threshold（联合优化）
+#   模式C — 二维网格 m_days × switch_threshold（默认）
+#   模式D — 三维网格 m_days × switch_threshold × decay_ratio（5×5×5=125组）
+#   模式E — 单扫 decay_ratio（固定 m_days=25, switch_threshold=1.0）
 #
 # tag 命名规则：
-#   m{d}          → m_days=d,  switch_threshold=1.0（默认）
-#   t{t}          → m_days=25（默认）, switch_threshold=t
-#   m{d}_t{t}     → 两者均非默认
-#   baseline      → 全默认（m_days=25, switch_threshold=1.0）
+#   m{d}          → m_days=d
+#   t{t}          → switch_threshold=t
+#   r{decay}      → decay_ratio=decay
+#   baseline      → 全默认 (m_days=25, switch_threshold=1.0, decay_ratio=1.0)
 
 # ---- 可调范围 ----
-_M_DAYS_LIST   = [20,25,   30, 35, 40]          # 根据上次扫描结果聚焦到甜区
-_THRESHOLD_LIST = [1.0, 1.05, 1.10, 1.15, 1.20]
+_M_DAYS_LIST     = [20, 25, 30, 35, 40]
+_THRESHOLD_LIST  = [1.0, 1.05, 1.10, 1.15, 1.20]
+_DECAY_RATIO_LIST = [1.0, 1.5, 2.0, 2.5, 3.0]
 
-def _make_tag(d, t):
-    t_int = round(t * 100)   # 用 round 避免 1.15*100=114.999... 的浮点误差
-    if d == 25 and t == 1.0:
-        return "baseline"
-    if d == 25:
-        return f"t{t_int:03d}"                  # t105 / t110 / t115 / t120
-    if t == 1.0:
-        return f"m{d:02d}"                      # m20 / m30 / m35 / m40
-    return f"m{d:02d}_t{t_int:03d}"            # m30_t115
-
-def _make_override(d, t):
-    override = {}
+def _make_tag(d, t, r=1.0):
+    r_int = round(r * 10)
+    t_int = round(t * 100)
+    parts = []
     if d != 25:
-        override["scorer_momentum_r2"] = {"m_days": d}
+        parts.append(f"m{d:02d}")
+    if t != 1.0:
+        parts.append(f"t{t_int:03d}")
+    if r != 1.0:
+        parts.append(f"r{r_int:02d}")
+    return "_".join(parts) if parts else "baseline"
+
+def _make_override(d, t, r=1.0):
+    override = {}
+    scorer_override = {}
+    if d != 25:
+        scorer_override["m_days"] = d
+    if r != 1.0:
+        scorer_override["decay_ratio"] = r
+    if scorer_override:
+        override["scorer_momentum_r2"] = scorer_override
     if t != 1.0:
         override["switch_threshold"] = t
     return override
 
 # 模式C：二维网格（m_days × switch_threshold），共 len(_M_DAYS_LIST) × len(_THRESHOLD_LIST) 组
+# EXPERIMENTS = [
+#     (_make_tag(d, t), _make_override(d, t))
+#     for d in _M_DAYS_LIST
+#     for t in _THRESHOLD_LIST
+# ]
+
+# 模式D：三维网格（m_days × switch_threshold × decay_ratio），样本多，按需开启
+# EXPERIMENTS = [
+#     (_make_tag(d, t, r), _make_override(d, t, r))
+#     for d in _M_DAYS_LIST
+#     for t in _THRESHOLD_LIST
+#     for r in _DECAY_RATIO_LIST
+# ]
+
+# 模式E：单独扫 decay_ratio（固定 m_days=25, switch_threshold=1.0）
 EXPERIMENTS = [
-    (_make_tag(d, t), _make_override(d, t))
-    for d in _M_DAYS_LIST
-    for t in _THRESHOLD_LIST
+    (_make_tag(25, 1.0, r), _make_override(25, 1.0, r))
+    for r in _DECAY_RATIO_LIST
 ]
 
 # 模式A：只扫 m_days（注释掉模式C，取消下方注释）
