@@ -184,9 +184,9 @@ class MomentumR2Scorer(BaseScorer):
             try:
                 close = PlatformAdapter.get_close(etf, self.m_days)
                 if close is None or len(close) < self.m_days:
-                    out[etf] = float('-inf');
+                    out[etf] = float('-inf')
                     continue
-                y = np.log(close);
+                y = np.log(close)
                 x = np.arange(len(y))
                 slope, intercept = np.polyfit(x, y, 1)
                 ann = math.pow(math.exp(slope), 250) - 1

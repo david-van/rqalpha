@@ -17,6 +17,7 @@ from rqalpha import run_file
 # ==================== 基础配置 ====================
 STRATEGY_FILE = os.path.join(project_root, 'my_strategy/strategies/momentum.py')
 RESULT_DIR = Path(__file__).with_name('batch_results')
+RESULT_DIR = RESULT_DIR.joinpath("mdays_switch_threshold")
 RESULT_DIR.mkdir(exist_ok=True)
 
 
@@ -60,44 +61,61 @@ def make_base_config(tag: str):
 
 # ==================== 定义实验组 ====================
 # 每个实验 = (tag, 参数覆盖字典)
+#
+# 【模式说明】切换下方三种模式之一，注释掉其余两种：
+#
+#   模式A — 单维扫描 m_days（参数敏感性）
+#   模式B — 单维扫描 switch_threshold（阈值敏感性）
+#   模式C — 二维网格搜索 m_days × switch_threshold（联合优化）
+#
+# tag 命名规则：
+#   m{d}          → m_days=d,  switch_threshold=1.0（默认）
+#   t{t}          → m_days=25（默认）, switch_threshold=t
+#   m{d}_t{t}     → 两者均非默认
+#   baseline      → 全默认（m_days=25, switch_threshold=1.0）
+
+# ---- 可调范围 ----
+_M_DAYS_LIST   = [20,25,   30, 35, 40]          # 根据上次扫描结果聚焦到甜区
+_THRESHOLD_LIST = [1.0, 1.05, 1.10, 1.15, 1.20]
+
+def _make_tag(d, t):
+    t_int = round(t * 100)   # 用 round 避免 1.15*100=114.999... 的浮点误差
+    if d == 25 and t == 1.0:
+        return "baseline"
+    if d == 25:
+        return f"t{t_int:03d}"                  # t105 / t110 / t115 / t120
+    if t == 1.0:
+        return f"m{d:02d}"                      # m20 / m30 / m35 / m40
+    return f"m{d:02d}_t{t_int:03d}"            # m30_t115
+
+def _make_override(d, t):
+    override = {}
+    if d != 25:
+        override["scorer_momentum_r2"] = {"m_days": d}
+    if t != 1.0:
+        override["switch_threshold"] = t
+    return override
+
+# 模式C：二维网格（m_days × switch_threshold），共 len(_M_DAYS_LIST) × len(_THRESHOLD_LIST) 组
 EXPERIMENTS = [
-    ("baseline", {
-        # 全默认
-    }),
-    ("switch_threshold_05", {
-        "switch_threshold":1.05
-    }),
-    ("switch_threshold_10", {
-        "switch_threshold":1.1
-    }),
-    ("switch_threshold_15", {
-        "switch_threshold":1.15
-    }),
-    ("switch_threshold_20", {
-        "switch_threshold":1.2
-    }),
-    # ("no_min_score", {
-    #     "filter_min_score": {"enabled": False, "threshold": 0.0},
-    # }),
-    # ("with_ma_trend", {
-    #     "filter_ma_trend": {"enabled": True, "ma_period": 20},
-    # }),
-    # ("with_vol_filter", {
-    #     "filter_volatility": {"enabled": True, "n_days": 20, "max_vol": 0.4},
-    # }),
-    # ("all_filters_on", {
-    #     "filter_min_score":  {"enabled": True,  "threshold": 0.0},
-    #     "filter_ma_trend":   {"enabled": True,  "ma_period": 20},
-    #     "filter_volatility": {"enabled": True,  "n_days": 20, "max_vol": 0.5},
-    # }),
-    # ("mdays_60", {
-    #     "scorer_momentum_r2": {"enabled": True, "weight": 1.0, "m_days": 60},
-    # }),
-    # ("dual_scorer", {
-    #     "scorer_momentum_r2":     {"enabled": True, "weight": 0.7, "m_days": 25},
-    #     "scorer_momentum_simple": {"enabled": True, "weight": 0.3, "m_days": 20},
-    # }),
+    (_make_tag(d, t), _make_override(d, t))
+    for d in _M_DAYS_LIST
+    for t in _THRESHOLD_LIST
 ]
+
+# 模式A：只扫 m_days（注释掉模式C，取消下方注释）
+# _M_DAYS_LIST = [5, 8, 10, 15, 18, 20, 22, 25, 28, 30, 35, 40, 50, 60]
+# EXPERIMENTS = [
+#     ("baseline" if d == 25 else f"mdays_{d:02d}", {} if d == 25 else {"scorer_momentum_r2": {"m_days": d}})
+#     for d in _M_DAYS_LIST
+# ]
+
+# 模式B：只扫 switch_threshold（注释掉模式C，取消下方注释）
+# _THRESHOLD_LIST = [1.0, 1.05, 1.10, 1.15, 1.20]
+# EXPERIMENTS = [
+#     ("baseline" if t == 1.0 else f"t{int(t * 100):03d}", {} if t == 1.0 else {"switch_threshold": t})
+#     for t in _THRESHOLD_LIST
+# ]
 
 
 # ==================== 单次回测 ====================

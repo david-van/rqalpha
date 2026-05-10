@@ -31,6 +31,8 @@ matplotlib.rcParams["axes.unicode_minus"] = False
 # 配置
 # ============================================================
 RESULT_DIR = Path(__file__).with_name("batch_results")
+# todo 配置自己需要分析的详细目录
+RESULT_DIR = RESULT_DIR.joinpath("mdays_switch_threshold")
 TRADING_DAYS_PER_YEAR = 250
 
 
@@ -349,6 +351,10 @@ def plot_sensitivity(results: dict, save_path: Path):
         "索提诺": [p[2]["summary"].get("sortino", 0) for p in pairs],
     }
 
+    # 自动判断扫描的是哪个参数，用于图表标题和 X 轴标签
+    has_mdays = any("mdays" in p[1] for p in pairs)
+    param_label = "m_days (回望天数)" if has_mdays else "阈值系数 (switch_threshold)"
+
     fig, axes = plt.subplots(2, 3, figsize=(16, 9))
     axes_flat = axes.flatten()
 
@@ -359,14 +365,14 @@ def plot_sensitivity(results: dict, save_path: Path):
             ax.annotate(t, (th, v), textcoords="offset points", xytext=(0, 10),
                         fontsize=7, ha="center")
         ax.set_title(name)
-        ax.set_xlabel("阈值系数")
+        ax.set_xlabel(param_label)
         ax.grid(True, alpha=0.3)
         if name in ("最大回撤",):
             ax.yaxis.set_major_formatter(mtic.PercentFormatter(1.0))
         if name in ("年化收益",):
             ax.yaxis.set_major_formatter(mtic.PercentFormatter(1.0))
 
-    # 第6个子图：阈值 vs 交易次数
+    # 第6个子图：参数值 vs 交易次数
     ax = axes_flat[5]
     trade_counts = [len(p[2]["trades"]) for p in pairs]
     ax.plot(thresholds, trade_counts, marker="o", color="darkred", linewidth=1.5, markersize=8)
@@ -374,30 +380,74 @@ def plot_sensitivity(results: dict, save_path: Path):
         ax.annotate(str(v), (th, v), textcoords="offset points", xytext=(0, 10),
                     fontsize=7, ha="center")
     ax.set_title("交易总次数")
-    ax.set_xlabel("阈值系数")
+    ax.set_xlabel(param_label)
     ax.grid(True, alpha=0.3)
 
-    fig.suptitle("参数敏感性分析 — switch_threshold", fontsize=14, fontweight="bold")
+    fig.suptitle(f"参数敏感性分析 — {param_label}", fontsize=14, fontweight="bold")
     plt.tight_layout()
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"已保存: {save_path}")
 
 
-def _extract_threshold(tag: str):
-    """从 tag 名中提取阈值参数值，如 'switch_threshold_10' → 1.10"""
+def _parse_tag(tag: str) -> dict:
+    """从 tag 名中解析参数值，返回 {'m_days': int, 'threshold': float}。
+
+    支持的 tag 格式（来自 run.py 的 _make_tag）：
+      baseline          → m_days=25, threshold=1.0
+      m28               → m_days=28, threshold=1.0
+      t110              → m_days=25, threshold=1.10
+      m28_t110          → m_days=28, threshold=1.10
+      mdays_28          → m_days=28, threshold=1.0   (旧格式兼容)
+      switch_threshold_10 → m_days=25, threshold=1.10 (旧格式兼容)
+    """
     import re
-    # 匹配 switch_threshold_XX 格式, XX可能为 05, 10, 15, 20 等
+    m_days = 25       # 默认值
+    threshold = 1.0   # 默认值
+
+    # 新格式：m{DD} 或 m{DD}_t{TTT}
+    # 用 (?<![a-z]) 和 (?!\d) 代替 \b，避免 _ 被当作单词字符导致边界失效
+    m = re.search(r"(?<![a-z])m(\d{2})(?!\d)", tag)
+    if m:
+        m_days = int(m.group(1))
+
+    # 新格式：t{TTT}（三位，如 t115 → 1.15）
+    # 匹配 _t{TTT} 或 行首t{TTT}，避免 mdays 里的 d 被误匹配
+    m = re.search(r"(?:^|_)t(\d{3})(?!\d)", tag)
+    if m:
+        threshold = int(m.group(1)) / 100.0
+
+    # 旧格式兼容：mdays_XX
+    m = re.search(r"mdays[_](\d+)", tag)
+    if m:
+        m_days = int(m.group(1))
+
+    # 旧格式兼容：switch_threshold_XX
     m = re.search(r"switch_threshold[_]?(\d+)", tag)
     if m:
         digits = m.group(1)
-        if len(digits) <= 2:
-            return float(digits) / 100 + 1.0  # 05→1.05, 10→1.10, 15→1.15, 20→1.20
-        else:
-            return float(digits) / 100  # 105→1.05
-    # baseline → 1.0
-    if "baseline" in tag.lower():
-        return 1.0
+        threshold = float(digits) / 100 + 1.0 if len(digits) <= 2 else float(digits) / 100
+
+    return {"m_days": m_days, "threshold": threshold}
+
+
+def _extract_threshold(tag: str):
+    """单维敏感性图用：返回该 tag 的"主参数值"（用于 X 轴）。
+    二维场景（tag 同时含 m 和 t）返回 None，由 plot_grid_heatmap 处理。
+    """
+    p = _parse_tag(tag)
+    import re
+    has_m = bool(re.search(r"\bm\d{2}\b", tag) or re.search(r"mdays[_]\d+", tag))
+    has_t = bool(re.search(r"\bt\d{3}\b", tag) or re.search(r"switch_threshold", tag))
+
+    if has_m and has_t:
+        return None   # 二维点，不参与单维敏感性图
+    if has_m or tag.lower() == "baseline":
+        return p["m_days"]
+    if has_t:
+        return p["threshold"]
+    if tag.lower() == "baseline":
+        return p["m_days"]
     return None
 
 
@@ -607,8 +657,128 @@ def plot_risk_return(results: dict, save_path: Path):
 
 
 # ============================================================
-# 终端表格打印
+# 图表 7: 二维参数网格热力图（m_days × switch_threshold）
 # ============================================================
+def plot_grid_heatmap(results: dict, save_path: Path):
+    """当实验是二维网格时，画 m_days(行) × switch_threshold(列) 的热力图。
+    每个格子显示夏普比率，颜色深浅表示高低。
+    同时输出年化收益和最大回撤的对应热力图（共3张子图）。
+    若检测到不是二维数据则跳过。
+    """
+    import re
+
+    # 解析所有 tag
+    parsed = {tag: _parse_tag(tag) for tag in results}
+    m_days_vals   = sorted(set(p["m_days"]    for p in parsed.values()))
+    threshold_vals = sorted(set(p["threshold"] for p in parsed.values()))
+
+    # 至少要有 2×2 才算二维
+    if len(m_days_vals) < 2 or len(threshold_vals) < 2:
+        print("二维网格热力图: 数据不是二维网格，跳过")
+        return
+
+    def build_matrix(metric_key):
+        mat = np.full((len(m_days_vals), len(threshold_vals)), np.nan)
+        for tag, data in results.items():
+            p = parsed[tag]
+            i = m_days_vals.index(p["m_days"])
+            j = threshold_vals.index(p["threshold"])
+            mat[i, j] = data["summary"].get(metric_key, np.nan)
+        return mat
+
+    metrics = [
+        ("sharpe",             "夏普比率",  "YlGn",   None,  None),
+        ("annualized_returns", "年化收益",  "RdYlGn", -0.1,  0.5),
+        ("max_drawdown",       "最大回撤",  "RdYlGn_r", -0.5, -0.1),
+    ]
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, max(4, len(m_days_vals) * 0.7 + 2)))
+
+    for ax, (key, title, cmap, vmin, vmax) in zip(axes, metrics):
+        mat = build_matrix(key)
+        im = ax.imshow(mat, cmap=cmap, aspect="auto", vmin=vmin, vmax=vmax)
+        plt.colorbar(im, ax=ax, shrink=0.8,
+                     format=mtic.PercentFormatter(1.0) if key != "sharpe" else None)
+
+        # 标注数值
+        for i in range(len(m_days_vals)):
+            for j in range(len(threshold_vals)):
+                v = mat[i, j]
+                if not np.isnan(v):
+                    txt = f"{v:.3f}" if key == "sharpe" else f"{v:.1%}"
+                    ax.text(j, i, txt, ha="center", va="center", fontsize=8, fontweight="bold",
+                            color="white" if (key == "sharpe" and v > mat[~np.isnan(mat)].mean()) else "black")
+
+        ax.set_xticks(range(len(threshold_vals)))
+        ax.set_xticklabels([f"{t:.2f}" for t in threshold_vals], fontsize=9)
+        ax.set_yticks(range(len(m_days_vals)))
+        ax.set_yticklabels([str(d) for d in m_days_vals], fontsize=9)
+        ax.set_xlabel("switch_threshold", fontsize=10)
+        ax.set_ylabel("m_days", fontsize=10)
+        ax.set_title(title, fontsize=12, fontweight="bold")
+
+        # 标出最优格子（夏普最高 / 年化最高 / 回撤最小）
+        if key == "sharpe":
+            best = np.unravel_index(np.nanargmax(mat), mat.shape)
+        elif key == "annualized_returns":
+            best = np.unravel_index(np.nanargmax(mat), mat.shape)
+        else:  # max_drawdown：值越大（越接近0）越好
+            best = np.unravel_index(np.nanargmax(mat), mat.shape)
+        ax.add_patch(plt.Rectangle((best[1] - 0.5, best[0] - 0.5), 1, 1,
+                                   fill=False, edgecolor="red", linewidth=2.5))
+
+    fig.suptitle("二维参数网格热力图  (红框=最优)", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"已保存: {save_path}")
+
+
+# ============================================================
+# 终端：二维网格汇总表
+# ============================================================
+def print_grid_table(results: dict):
+    """打印 m_days × switch_threshold 的夏普/年化收益透视表"""
+    parsed = {tag: _parse_tag(tag) for tag in results}
+    m_days_vals    = sorted(set(p["m_days"]    for p in parsed.values()))
+    threshold_vals = sorted(set(p["threshold"] for p in parsed.values()))
+
+    if len(m_days_vals) < 2 or len(threshold_vals) < 2:
+        return  # 不是二维，跳过
+
+    print("\n" + "=" * 100)
+    print("【二维网格：夏普比率透视表】  行=m_days  列=switch_threshold")
+    print("=" * 100)
+    rows = []
+    for d in m_days_vals:
+        row = {"m_days": d}
+        for t in threshold_vals:
+            # 找到对应 tag
+            match = [tag for tag, p in parsed.items() if p["m_days"] == d and p["threshold"] == t]
+            if match:
+                v = results[match[0]]["summary"].get("sharpe", np.nan)
+                row[f"t={t:.2f}"] = f"{v:.3f}" if not np.isnan(v) else "-"
+            else:
+                row[f"t={t:.2f}"] = "-"
+        rows.append(row)
+    print(pd.DataFrame(rows).set_index("m_days").to_string())
+
+    print("\n" + "=" * 100)
+    print("【二维网格：年化收益透视表】  行=m_days  列=switch_threshold")
+    print("=" * 100)
+    rows = []
+    for d in m_days_vals:
+        row = {"m_days": d}
+        for t in threshold_vals:
+            match = [tag for tag, p in parsed.items() if p["m_days"] == d and p["threshold"] == t]
+            if match:
+                v = results[match[0]]["summary"].get("annualized_returns", np.nan)
+                row[f"t={t:.2f}"] = f"{v:.2%}" if not np.isnan(v) else "-"
+            else:
+                row[f"t={t:.2f}"] = "-"
+        rows.append(row)
+    print(pd.DataFrame(rows).set_index("m_days").to_string())
+    print("=" * 100 + "\n")
 def print_terminal_tables(results: dict):
     """打印所有表格到终端"""
     pd.set_option("display.width", 160)
@@ -709,6 +879,7 @@ def main():
 
     # 终端表格
     print_terminal_tables(results)
+    print_grid_table(results)          # 二维网格时额外打印透视表
 
     # 图表
     print("\n生成图表...")
@@ -718,6 +889,7 @@ def main():
     plot_trade_analysis(results, RESULT_DIR / "analysis_trades.png")
     plot_yearly_heatmap(results, RESULT_DIR / "analysis_yearly.png")
     plot_risk_return(results, RESULT_DIR / "analysis_risk_return.png")
+    plot_grid_heatmap(results, RESULT_DIR / "analysis_grid_heatmap.png")  # 二维网格专属
 
     print("\n全部完成!")
 
