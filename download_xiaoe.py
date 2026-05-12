@@ -196,7 +196,7 @@ def download_images(content: str, date: str, output_dir: str) -> str:
     def _replace(m: re.Match) -> str:
         tag = m.group(0)
         url = m.group(1)
-        raw_name = _pick_name(tag, url)
+        raw_name = _pick_name(tag, url).replace("/", "_").replace("\\", "_")
         name = f"{date}_{raw_name}" if date else raw_name
 
         # 去重：同名文件加 _2, _3...
@@ -351,8 +351,8 @@ def download_by_resource_id(resource_id: str, title: str = "", date: str = ""):
 
 if __name__ == "__main__":
     download(
-        start=130,
-        end=170,              # None 表示全部，改成数字表示只下载到第几篇
+        start=160,
+        end=210,              # None 表示全部，改成数字表示只下载到第几篇
         skip_existing=True,  # True: 跳过已存在的文件; False: 强制重新下载
     )
     # 如果知道 resource_id，也可以直接调这个：
