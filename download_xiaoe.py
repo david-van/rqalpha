@@ -45,8 +45,8 @@ LIST_API = f"{BASE_URL}/xe.course.business.column.items.get/2.0.0"
 DETAIL_API = f"{BASE_URL}/xe.course.business_go.get.detail/2.0.0"
 
 PAGE_SIZE = 20
-SLEEP_MIN = 1.0
-SLEEP_MAX = 10.0
+SLEEP_MIN = 3.0
+SLEEP_MAX = 15.0
 DOWNLOAD_IMAGES = True
 IMAGES_DIR = "images"
 
@@ -257,12 +257,13 @@ def download(
     print(f"输出目录: {BASE_DIR}/<年份>/")
     print("=" * 60)
 
-    idx = 0
+    start_page = (start - 1) // PAGE_SIZE + 1
+    idx = (start_page - 1) * PAGE_SIZE
     seen: set[str] = set()
     downloaded = 0
 
-    for page in range(1, total_pages + 1):
-        if page == 1:
+    for page in range(start_page, total_pages + 1):
+        if page == start_page and page == 1:
             page_data = first_page
         else:
             if idx >= end:
@@ -351,8 +352,8 @@ def download_by_resource_id(resource_id: str, title: str = "", date: str = ""):
 
 if __name__ == "__main__":
     download(
-        start=160,
-        end=210,              # None 表示全部，改成数字表示只下载到第几篇
+        start=320,
+        end=370,              # None 表示全部，改成数字表示只下载到第几篇
         skip_existing=True,  # True: 跳过已存在的文件; False: 强制重新下载
     )
     # 如果知道 resource_id，也可以直接调这个：
