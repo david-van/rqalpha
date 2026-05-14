@@ -17,7 +17,7 @@ from rqalpha import run_file
 # ==================== 基础配置 ====================
 STRATEGY_FILE = os.path.join(project_root, 'my_strategy/strategies/momentum.py')
 RESULT_DIR = Path(__file__).with_name('batch_results')
-RESULT_DIR = RESULT_DIR.joinpath("decay_ratio")
+RESULT_DIR = RESULT_DIR.joinpath("lihai_pool")
 RESULT_DIR.mkdir(exist_ok=True)
 
 
@@ -27,11 +27,11 @@ def make_base_config(tag: str):
         "base": {
             "strategy_file": STRATEGY_FILE,
             "data_bundle_path": r"D:\datas\bundle",
-            "start_date": "2018-01-01",
+            "start_date": "2020-01-01",
             "end_date":   "2026-01-01",
             "frequency":  "1d",
             "slippage":   '0.0',
-            "accounts":   {"stock": 10000},
+            "accounts":   {"stock": 50000},
         },
         "mod": {
             "sys_transaction_cost": {
@@ -120,9 +120,14 @@ def _make_override(d, t, r=1.0):
 # ]
 
 # 模式E：单独扫 decay_ratio（固定 m_days=25, switch_threshold=1.0）
+# EXPERIMENTS = [
+#     (_make_tag(25, 1.0, r), _make_override(25, 1.0, r))
+#     for r in _DECAY_RATIO_LIST
+# ]
+
+# 模式F：动态股票池（从 xiaoe_articles CSV 按日期加载持仓池）
 EXPERIMENTS = [
-    (_make_tag(25, 1.0, r), _make_override(25, 1.0, r))
-    for r in _DECAY_RATIO_LIST
+    ("dynamic_pool", {"pool_csv_dir": str(Path(project_root) / "xiaoe_articles")}),
 ]
 
 # 模式A：只扫 m_days（注释掉模式C，取消下方注释）

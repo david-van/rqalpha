@@ -8,10 +8,12 @@
 #         2) 修改 PlatformAdapter 中对应平台分支
 #         3) 调整 ETF_POOL 代码后缀
 
+import bisect
 import math
 import numpy as np
 import pandas as pd
 from abc import ABC, abstractmethod
+from pathlib import Path
 
 # ============================================================
 # 【平台标识】迁移时改这里
@@ -402,6 +404,32 @@ ETF_POOL_MAP = {
     'ptrade': ['518880.SS', '513100.SS', '159915.SZ', '510180.SS'],
 }
 
+
+# ============================================================
+# 【动态股票池加载器】—— 从小鹅文章 CSV 加载按日期变化的持仓池
+# ============================================================
+class DynamicPoolLoader:
+    """从持仓 CSV 加载按日期变化的股票池"""
+
+    def __init__(self, csv_dir):
+        self._map = {}
+        for f in Path(csv_dir).glob("*holdings*.csv"):
+            df = pd.read_csv(f, encoding="utf-8-sig")
+            for _, row in df.iterrows():
+                codes_str = str(row.get("持有股票代码", ""))
+                if not codes_str or codes_str == "nan":
+                    continue
+                codes = [c.strip() for c in codes_str.split("|") if c.strip()]
+                if codes:
+                    self._map[str(row["日期"]).strip()] = codes
+        self._dates = sorted(self._map.keys())
+
+    def get(self, date):
+        """返回 ≤ date 的最新一篇文章的股票池，没有则返回 None"""
+        idx = bisect.bisect_right(self._dates, date.strftime("%Y-%m-%d")) - 1
+        return self._map[self._dates[idx]] if idx >= 0 else None
+
+
 # ============================================================
 # 【策略配置】—— 改为工厂函数，支持外部参数覆盖
 # ============================================================
@@ -526,6 +554,15 @@ def _common_init(context):
                 base_pool.remove(code)
                 PlatformAdapter.log_info(f'[etf_pool] 移除: {code}')
     context.etf_pool = base_pool
+    # ========== 动态股票池（按日期从 CSV 加载）==========
+    if 'pool_csv_dir' in params:
+        context.pool_loader = DynamicPoolLoader(params['pool_csv_dir'])
+        pool = context.pool_loader.get(context.now)
+        if pool:
+            context.etf_pool = pool
+            PlatformAdapter.log_info(f'[动态池] 初始加载 {len(pool)} 只: {pool}')
+    else:
+        context.pool_loader = None
     # context.etf_pool = ETF_POOL_MAP[PLATFORM]
     context.target_list = []
     context.params = params
@@ -536,6 +573,18 @@ def _common_init(context):
     _ctx_holder['ctx'] = context
     PlatformAdapter.register_schedule(sell_trade, buy_trade)
     PlatformAdapter.log_info(f'策略初始化完成 [平台={PLATFORM}] 参数={params}')
+
+
+def before_trading(context):
+    """每个交易日前检查并切换动态股票池"""
+    if context.pool_loader is None:
+        return
+    new_pool = context.pool_loader.get(context.now)
+    if new_pool and new_pool != context.etf_pool:
+        PlatformAdapter.log_info(
+            f'[动态池] 切换: {len(context.etf_pool)}只 → {len(new_pool)}只'
+        )
+        context.etf_pool = new_pool
 
 
 # ---------- RQAlpha 入口 ----------
