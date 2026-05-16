@@ -213,7 +213,7 @@ from plotly.offline import get_plotlyjs
 # 配置
 # ============================================================
 RESULT_DIR = Path(__file__).with_name("batch_results")
-RESULT_DIR = RESULT_DIR.joinpath("decay_ratio")
+RESULT_DIR = RESULT_DIR.joinpath("lihai_pool")
 
 # 颜色方案：尽量接近原 matplotlib tab10
 COLORS = [

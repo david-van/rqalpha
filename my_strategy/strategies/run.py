@@ -78,6 +78,8 @@ def make_base_config(tag: str):
 _M_DAYS_LIST     = [20, 25, 30, 35, 40]
 _THRESHOLD_LIST  = [1.0, 1.05, 1.10, 1.15, 1.20]
 _DECAY_RATIO_LIST = [1.0, 1.5, 2.0, 2.5, 3.0]
+# 动态池模式专用：从极短到极长，看 m_days 对收益曲线的影响
+_DYN_M_DAYS_LIST = [5, 10, 15, 20, 25, 30, 40, 50, 60, 90, 120, 200]
 
 def _make_tag(d, t, r=1.0):
     r_int = round(r * 10)
@@ -126,8 +128,21 @@ def _make_override(d, t, r=1.0):
 # ]
 
 # 模式F：动态股票池（从 xiaoe_articles CSV 按日期加载持仓池）
+# EXPERIMENTS = [
+#     ("dynamic_pool", {
+#         "pool_csv_dir": str(Path(project_root) / "xiaoe_articles"),
+#         "scorer_momentum_r2": {"m_days": 50},
+#     }),
+# ]
+
+# 模式G：动态股票池 × m_days 扫描（判断动量天数是否是问题）
+# tag 命名：dyn_m{天数}
 EXPERIMENTS = [
-    ("dynamic_pool", {"pool_csv_dir": str(Path(project_root) / "xiaoe_articles")}),
+    (f"dyn_m{d:03d}", {
+        "pool_csv_dir": str(Path(project_root) / "xiaoe_articles"),
+        "scorer_momentum_r2": {"m_days": d},
+    })
+    for d in _DYN_M_DAYS_LIST
 ]
 
 # 模式A：只扫 m_days（注释掉模式C，取消下方注释）
