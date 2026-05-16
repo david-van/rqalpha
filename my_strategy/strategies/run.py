@@ -79,7 +79,9 @@ _M_DAYS_LIST     = [20, 25, 30, 35, 40]
 _THRESHOLD_LIST  = [1.0, 1.05, 1.10, 1.15, 1.20]
 _DECAY_RATIO_LIST = [1.0, 1.5, 2.0, 2.5, 3.0]
 # 动态池模式专用：从极短到极长，看 m_days 对收益曲线的影响
-_DYN_M_DAYS_LIST = [5, 10, 15, 20, 25, 30, 40, 50, 60, 90, 120, 200]
+# _DYN_M_DAYS_LIST = [5, 10, 15, 20, 25, 30, 40, 50, 60,70,80, 90, 120, 200]
+_DYN_M_DAYS_LIST = [55, 58, 60, 62, 65, 68, 70, 75, 80, 85, 90, 95, 100]
+
 
 def _make_tag(d, t, r=1.0):
     r_int = round(r * 10)
@@ -139,7 +141,7 @@ def _make_override(d, t, r=1.0):
 # tag 命名：dyn_m{天数}
 EXPERIMENTS = [
     (f"dyn_m{d:03d}", {
-        "pool_csv_dir": str(Path(project_root) / "xiaoe_articles"),
+        "pool_csv_dir": str(Path(project_root) / "my_strategy/strategies/xiaoe_articles"),
         "scorer_momentum_r2": {"m_days": d},
     })
     for d in _DYN_M_DAYS_LIST
