@@ -14,6 +14,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+from plotly.offline import get_plotlyjs
+
 
 warnings.filterwarnings("ignore")
 
@@ -22,6 +26,17 @@ warnings.filterwarnings("ignore")
 # ============================================================
 TRADING_DAYS_PER_YEAR = 250
 
+# ============================================================
+# 配置
+# ============================================================
+RESULT_DIR = Path(__file__).with_name("batch_results")
+RESULT_DIR = RESULT_DIR.joinpath("lihai_pool")
+
+# 颜色方案：尽量接近原 matplotlib tab10
+COLORS = [
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+]
 
 def load_all_results(result_dir: Path) -> dict:
     """读取所有 .pkl 文件，返回 {tag: {summary, portfolio, trades}}"""
@@ -141,7 +156,7 @@ def _parse_tag(tag: str) -> dict:
     threshold = 1.0
     decay_ratio = 1.0
 
-    m = re.search(r"(?<![a-z])m(\d{2})(?!\d)", tag)
+    m = re.search(r"(?<![a-z])m(\d{2,3})(?!\d)", tag)
     if m:
         m_days = int(m.group(1))
 
@@ -169,7 +184,7 @@ def _extract_threshold(tag: str, scan_param: str = None):
     """单维敏感性图用：返回该 tag 的主参数值（用于 X 轴）"""
     import re
     p = _parse_tag(tag)
-    has_m = bool(re.search(r"(?<![a-z])m\d{2}(?!\d)", tag) or re.search(r"mdays[_]\d+", tag))
+    has_m = bool(re.search(r"(?<![a-z])m\d{2,3}(?!\d)", tag) or re.search(r"mdays[_]\d+", tag))
     has_t = bool(re.search(r"(?:^|_)t\d{3}(?!\d)", tag) or re.search(r"switch_threshold", tag))
     has_r = bool(re.search(r"(?:^|_)r\d{2}(?!\d)", tag))
 
@@ -194,32 +209,18 @@ def _extract_threshold(tag: str, scan_param: str = None):
 
 def _detect_scan_param(tags: list) -> str:
     """从非 baseline 的 tag 列表中检测扫描参数类型"""
+    import re
     for tag in tags:
         if tag == "baseline":
             continue
-        if tag.startswith("r"):
+        if re.search(r"(?<![a-z])r\d{2}(?!\d)", tag):
             return "r"
-        if tag.startswith("m"):
+        if re.search(r"(?<![a-z])m\d{2,3}(?!\d)", tag) or re.search(r"mdays[_]\d+", tag):
             return "m"
-        if tag.startswith("t"):
+        if re.search(r"(?:^|_)t\d{3}(?!\d)", tag) or re.search(r"switch_threshold", tag):
             return "t"
     return "m"
 
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from plotly.offline import get_plotlyjs
-
-# ============================================================
-# 配置
-# ============================================================
-RESULT_DIR = Path(__file__).with_name("batch_results")
-RESULT_DIR = RESULT_DIR.joinpath("lihai_pool")
-
-# 颜色方案：尽量接近原 matplotlib tab10
-COLORS = [
-    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
-    "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
-]
 
 
 def _get_color(i: int) -> str:
@@ -370,6 +371,7 @@ def build_overview_figure(results: dict) -> go.Figure:
         barmode="group",
         hovermode="closest",
         autosize=True,
+        height=750,
         legend=dict(font=dict(size=10), orientation="h", yanchor="top", y=-0.08, xanchor="center", x=0.5),
     )
     fig.update_yaxes(title_text="单位净值", row=1, col=1)
@@ -458,6 +460,7 @@ def build_curves_figure(results: dict) -> go.Figure:
         title=dict(text="曲线对比分析", font=dict(size=18)),
         hovermode="closest",
         autosize=True,
+        height=950,
         legend=dict(font=dict(size=10), orientation="h", yanchor="top", y=-0.10, xanchor="center", x=0.5),
     )
     fig.update_yaxes(title_text="单位净值", row=1, col=1)
@@ -541,6 +544,7 @@ def build_sensitivity_figure(results: dict) -> go.Figure | None:
     fig.update_layout(
         title=dict(text=f"参数敏感性分析 — {param_label}", font=dict(size=18)),
         autosize=True,
+        height=700,
         hovermode="closest",
     )
     for idx in range(6):
@@ -758,6 +762,7 @@ def build_trades_figure(results: dict) -> go.Figure:
         barmode="group",
         hovermode="closest",
         autosize=True,
+        height=750,
         legend=dict(font=dict(size=10)),
     )
     fig.update_yaxes(title_text="年化收益", tickformat=".0%", row=1, col=2)
@@ -828,6 +833,7 @@ def build_yearly_figure(results: dict) -> go.Figure | None:
         barmode="group",
         hovermode="closest",
         autosize=True,
+        height=800,
         legend=dict(font=dict(size=10), orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5),
     )
     fig.update_yaxes(tickformat=".0%", row=2, col=1)
@@ -867,6 +873,7 @@ def build_risk_return_figure(results: dict) -> go.Figure:
         yaxis=dict(title="年化收益", tickformat=".0%"),
         hovermode="closest",
         autosize=True,
+        height=650,
         showlegend=False,
     )
     fig.add_hline(y=0, line=dict(color="black", width=0.5))
@@ -943,18 +950,27 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
     tab_figures["yearly"] = [("yr_main", yearly_fig)] if yearly_fig is not None else []
     tab_figures["risk"] = [("rr_main", risk_return_fig)]
 
-    # 序列化为 JSON
+    # 序列化为 JSON（截断浮点精度以缩减体积）
+    def _truncate_floats(obj, precision=4):
+        if isinstance(obj, dict):
+            return {k: _truncate_floats(v, precision) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_truncate_floats(v, precision) for v in obj]
+        if isinstance(obj, float):
+            return round(obj, precision)
+        return obj
+
     figure_specs_json = OrderedDict()
     for tab_id, specs in tab_figures.items():
         for div_id, fig in specs:
-            figure_specs_json[div_id] = _json.loads(fig.to_json())
+            figure_specs_json[div_id] = _truncate_floats(_json.loads(fig.to_json()))
 
     # ---- 构建各 Tab 的 HTML 占位 div ----
     def _make_div(div_id: str) -> str:
         return f'<div id="{div_id}" class="plotly-graph-div"></div>'
 
     def _make_plot_container(div_id: str) -> str:
-        return f'<div class="plot-container">{_make_div(div_id)}</div>'
+        return f'<div class="plot-container"><button class="fullscreen-btn" onclick="toggleFullscreen(this.parentElement)" title="全屏">&#x26F6;</button>{_make_div(div_id)}</div>'
 
     overview_content = _make_plot_container("ov_main")
     curves_content = _make_plot_container("cv_main")
@@ -1018,14 +1034,33 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
     .tab-panel.active {{ display: block; }}
     .plot-container {{
       background: white; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-      padding: 16px; margin-bottom: 20px;
+      padding: 16px; margin-bottom: 20px; position: relative;
     }}
     .plot-container h3 {{
       font-size: 16px; margin-bottom: 12px; color: #2c3e50;
       border-left: 4px solid #1a73e8; padding-left: 10px;
     }}
     .plotly-graph-div {{
-      min-height: 450px;
+      min-height: 550px;
+    }}
+    .fullscreen-btn {{
+      position: absolute; top: 10px; right: 10px; z-index: 50;
+      background: rgba(255,255,255,0.9); border: 1px solid #ddd; border-radius: 4px;
+      padding: 4px 8px; cursor: pointer; font-size: 16px; color: #555;
+      transition: all 0.2s; line-height: 1;
+    }}
+    .fullscreen-btn:hover {{ background: #1a73e8; color: white; border-color: #1a73e8; }}
+    .plot-container:fullscreen {{
+      background: white; padding: 20px; overflow: auto;
+    }}
+    .plot-container:fullscreen .plotly-graph-div {{
+      min-height: 90vh !important; height: 90vh !important;
+    }}
+    .plot-container:-webkit-full-screen {{
+      background: white; padding: 20px; overflow: auto;
+    }}
+    .plot-container:-webkit-full-screen .plotly-graph-div {{
+      min-height: 90vh !important; height: 90vh !important;
     }}
     .summary-table {{
       width: 100%; border-collapse: collapse; font-size: 13px;
@@ -1095,14 +1130,39 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
 
   <div class="footer">RQAlpha 策略回测分析 | Powered by Plotly</div>
 
-  <script>{plotly_js}</script>
   <script>
     var FIGURES = {_json.dumps(figure_specs_json)};
     var _initialized = {{}};
+    var _plotlyConfig = {{responsive: true, displaylogo: false}};
+    var _plotlyReady = false;
+
+    function toggleFullscreen(container) {{
+      if (!document.fullscreenElement) {{
+        container.requestFullscreen().then(function() {{
+          setTimeout(function() {{
+            container.querySelectorAll('.plotly-graph-div').forEach(function(el) {{
+              Plotly.Plots.resize(el);
+            }});
+          }}, 100);
+        }});
+      }} else {{
+        document.exitFullscreen();
+      }}
+    }}
+
+    document.addEventListener('fullscreenchange', function() {{
+      if (!document.fullscreenElement) {{
+        setTimeout(function() {{
+          document.querySelectorAll('.plotly-graph-div').forEach(function(el) {{
+            if (el._fullData) Plotly.Plots.resize(el);
+          }});
+        }}, 100);
+      }}
+    }});
 
     function ensurePlots(tabName) {{
+      if (!_plotlyReady) return;
       if (_initialized[tabName]) {{
-        // 已初始化，只需 resize
         var panel = document.getElementById(tabName);
         if (panel) {{
           panel.querySelectorAll('.plotly-graph-div').forEach(function(el) {{
@@ -1118,7 +1178,7 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
       divs.forEach(function(el) {{
         var spec = FIGURES[el.id];
         if (spec) {{
-          Plotly.newPlot(el.id, spec.data, spec.layout);
+          Plotly.newPlot(el.id, spec.data, spec.layout, _plotlyConfig);
         }}
       }});
     }}
@@ -1128,15 +1188,16 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
       document.querySelectorAll('.tab-btn').forEach(function(b) {{ b.classList.remove('active'); }});
       document.getElementById(tabName).classList.add('active');
       evt.currentTarget.classList.add('active');
-      // 延迟初始化或 resize（等待 display:block 生效）
       setTimeout(function() {{ ensurePlots(tabName); }}, 50);
     }}
 
-    // 页面加载后立即初始化 overview（已显示）
-    window.addEventListener('load', function() {{
+    function onPlotlyLoaded() {{
+      _plotlyReady = true;
       ensurePlots('overview');
-    }});
+    }}
   </script>
+  <script>{plotly_js}</script>
+  <script>onPlotlyLoaded();</script>
 </body>
 </html>"""
 
