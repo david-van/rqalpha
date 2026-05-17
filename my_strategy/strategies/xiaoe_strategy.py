@@ -129,6 +129,7 @@ def init(context):
     context.pool = context.loader.get_pool(context.now)
     context.old_pool = []           # buy_and_hold 模式追踪上一期池子
     context.targets = {}
+    context.pending_targets = None  # targets to execute today only
     context.last_rebalance = None   # 上次调仓日期
     context.pool_changed = True     # 首日强制调仓
 
@@ -141,7 +142,7 @@ def init(context):
 def before_trading(context):
     """检查池是否变化"""
     new_pool = context.loader.get_pool(context.now)
-    if new_pool != context.pool:
+    if set(new_pool) != set(context.pool):
         logger.info(f"[池变化] {context.pool} → {new_pool}")
         context.pool = new_pool
         context.pool_changed = True
@@ -338,19 +339,17 @@ def _should_rebalance(context):
 def sell_trade(context, bar_dict):
     """计算目标并卖出非持有标的"""
     if not _should_rebalance(context):
+        context.pending_targets = None
         return
 
     new_targets = _compute_targets(context)
-
-    # 空 dict = 无变化，跳过本次调仓
-    if not new_targets:
-        return
 
     # 阈值保护
     old_targets = getattr(context, 'targets', {}) or {}
     new_targets = _apply_threshold(context, old_targets, new_targets)
 
     context.targets = new_targets
+    context.pending_targets = new_targets
     context.last_rebalance = context.now
     context.pool_changed = False
 
@@ -364,8 +363,12 @@ def sell_trade(context, bar_dict):
 
 def buy_trade(context, bar_dict):
     """按目标权重买入"""
-    targets = context.targets
+    targets = getattr(context, 'pending_targets', None)
+    if targets is None:
+        return
+
     if not targets:
+        context.pending_targets = None
         return
 
     total_value = context.portfolio.total_value
@@ -377,6 +380,7 @@ def buy_trade(context, bar_dict):
         order_target_value(code, target_val)
         if not holdings.get(code):
             logger.info(f"买入 {code} 权重 {weight:.2%}")
+    context.pending_targets = None
 
 
 def handle_bar(context, bar_dict):

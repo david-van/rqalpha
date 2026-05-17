@@ -1100,6 +1100,275 @@ def build_worst_days_table(portfolio: pd.DataFrame, n: int = 10) -> str:
 
 
 # ============================================================
+# Tab 8: 持仓与交易 — 3 张图 + 1 张调仓明细表
+# ============================================================
+
+def _prepare_trades(trades: pd.DataFrame) -> pd.DataFrame | None:
+    """统一预处理 trades DataFrame"""
+    if trades.empty:
+        return None
+    df = trades.copy()
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+    # 单笔成交金额
+    if "transaction_cost" in df.columns:
+        df["amount"] = df["last_price"] * df["last_quantity"].abs()
+    else:
+        df["amount"] = df["last_price"] * df["last_quantity"].abs()
+    return df
+
+
+def build_position_count_chart(portfolio: pd.DataFrame, trades: pd.DataFrame) -> go.Figure | None:
+    """持仓数量 + 总市值双轴时序图"""
+    df = _prepare_trades(trades)
+    if df is None:
+        return None
+
+    # 逐日累计持仓数：按时间顺序累加，在每个交易日计算当前持仓数
+    df_sorted = df.sort_index()
+    positions = {}  # {stock: cumulative_qty}
+    counts = []
+    for ts, day_trades in df_sorted.groupby(df_sorted.index):
+        for _, row in day_trades.iterrows():
+            sid = row["order_book_id"]
+            if sid not in positions:
+                positions[sid] = 0
+            if row["side"] == "BUY":
+                positions[sid] += row["last_quantity"]
+            else:
+                positions[sid] -= abs(row["last_quantity"])
+        n = sum(1 for q in positions.values() if q > 0)
+        counts.append((ts, n))
+
+    if not counts:
+        return None
+
+    count_series = pd.Series(
+        [c[1] for c in counts],
+        index=pd.DatetimeIndex([c[0] for c in counts]),
+    )
+
+    # 总市值
+    tv = None
+    if not portfolio.empty and "total_value" in portfolio.columns:
+        tv = portfolio["total_value"]
+        if not isinstance(tv.index, pd.DatetimeIndex):
+            tv.index = pd.to_datetime(tv.index)
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Scatter(
+            x=count_series.index, y=count_series.values, mode="lines",
+            name="持仓股票数", line=dict(color="#1f77b4", width=1.5),
+            hovertemplate="%{x|%Y-%m-%d}<br>持仓数: %{y}只<extra></extra>",
+        ),
+        secondary_y=False,
+    )
+    if tv is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=tv.index, y=tv.values, mode="lines",
+                name="总市值", line=dict(color="#ff7f0e", width=1.2, dash="dash"),
+                hovertemplate="%{x|%Y-%m-%d}<br>总市值: %{y:,.0f}<extra></extra>",
+            ),
+            secondary_y=True,
+        )
+
+    fig.update_yaxes(title_text="持仓股票数", secondary_y=False)
+    fig.update_yaxes(title_text="总市值", tickformat=",.0f", secondary_y=True)
+    fig.update_layout(
+        title=dict(text="持仓数量 & 总市值", font=dict(size=14)),
+        hovermode="closest",
+        autosize=True, height=420, margin=dict(t=55, b=40, l=40, r=40),
+        legend=dict(x=0.75, y=0.95),
+    )
+    return fig
+
+
+def build_stock_trade_freq(trades: pd.DataFrame) -> go.Figure | None:
+    """个股交易频次横向堆叠柱状图：买/卖分别着色"""
+    df = _prepare_trades(trades)
+    if df is None:
+        return None
+
+    freq = df.groupby(["symbol", "side"]).size().unstack(fill_value=0)
+    for col in ["BUY", "SELL"]:
+        if col not in freq.columns:
+            freq[col] = 0
+    freq["total"] = freq["BUY"] + freq["SELL"]
+    freq = freq.sort_values("total", ascending=True)
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        y=freq.index, x=freq["BUY"], name="买入",
+        orientation="h", marker=dict(color="#d62728"),
+        hovertemplate="%{y}<br>买入: %{x}次<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        y=freq.index, x=freq["SELL"], name="卖出",
+        orientation="h", marker=dict(color="#2ca02c"),
+        hovertemplate="%{y}<br>卖出: %{x}次<extra></extra>",
+    ))
+    fig.update_layout(
+        title=dict(text=f"个股交易频次 ({len(freq)}只)", font=dict(size=14)),
+        barmode="stack",
+        autosize=True, height=max(300, len(freq) * 25),
+        margin=dict(t=40, b=40, l=80, r=40),
+        legend=dict(x=0.85, y=0.98),
+        xaxis=dict(title="交易次数"),
+    )
+    return fig
+
+
+def build_monthly_buysell(trades: pd.DataFrame) -> go.Figure | None:
+    """月度买入金额 vs 卖出金额分组柱状图"""
+    df = _prepare_trades(trades)
+    if df is None:
+        return None
+
+    if "amount" not in df.columns:
+        return None
+
+    df["month"] = df.index.to_period("M").to_timestamp()
+    monthly = df.groupby(["month", "side"])["amount"].sum().unstack(fill_value=0)
+    for col in ["BUY", "SELL"]:
+        if col not in monthly.columns:
+            monthly[col] = 0
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=monthly.index, y=monthly["BUY"], name="买入金额",
+        marker=dict(color="#d62728"),
+        hovertemplate="%{x|%Y-%m}<br>买入: %{y:,.0f}<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        x=monthly.index, y=monthly["SELL"], name="卖出金额",
+        marker=dict(color="#2ca02c"),
+        hovertemplate="%{x|%Y-%m}<br>卖出: %{y:,.0f}<extra></extra>",
+    ))
+    fig.update_layout(
+        title=dict(text="月度买卖金额对比", font=dict(size=14)),
+        barmode="group",
+        autosize=True, height=420, margin=dict(t=40, b=40, l=40, r=20),
+        legend=dict(x=0.75, y=0.98),
+        yaxis=dict(title="金额", tickformat=",.0f"),
+    )
+    return fig
+
+
+def build_trade_log_data(trades: pd.DataFrame) -> list | None:
+    """从 trades 构建调仓记录列表，含每笔交易后的累计持仓量"""
+    df = _prepare_trades(trades)
+    if df is None:
+        return None
+
+    df = df.sort_index()
+    positions = {}  # {code: cumulative_qty}
+    records = []
+    for _, row in df.iterrows():
+        dt = row.name
+        code = str(row["order_book_id"])
+        side = str(row["side"])
+        qty = int(row["last_quantity"])
+        if code not in positions:
+            positions[code] = 0
+        if side == "BUY":
+            positions[code] += qty
+        else:
+            positions[code] -= abs(qty)
+        amt = row.get("amount", row.get("last_price", 0) * abs(row.get("last_quantity", 0)))
+        cost = row.get("transaction_cost", row.get("commission", 0) + row.get("tax", 0))
+        records.append({
+            "date": pd.Timestamp(dt).strftime("%Y-%m-%d"),
+            "code": code,
+            "name": str(row.get("symbol", "")),
+            "side": side,
+            "qty": qty,
+            "price": round(float(row["last_price"]), 3),
+            "amount": round(float(amt), 2),
+            "cost": round(float(cost), 4),
+            "pos": positions[code],  # 本次交易后该股票的累计持仓
+        })
+    return records
+
+
+def build_holdings_snapshot_data(trades: pd.DataFrame) -> dict | None:
+    """构建每日持仓快照: {date_str: {code: {name, qty, cost, last_price}}}"""
+    df = _prepare_trades(trades)
+    if df is None:
+        return None
+
+    df = df.sort_index()
+    positions = {}     # {code: {"qty": int, "cost": float, "name": str, "last_price": float}}
+
+    snapshots = {}
+    for ts, day_trades in df.groupby(df.index):
+        for _, row in day_trades.iterrows():
+            code = str(row["order_book_id"])
+            if code not in positions:
+                positions[code] = {"qty": 0, "cost": 0.0, "name": str(row.get("symbol", "")), "last_price": 0.0, "value": 0.0}
+            side = str(row["side"])
+            qty = int(row["last_quantity"])
+            price = float(row["last_price"])
+            # 买入金额用正值，卖出金额用负值（不影响市值计算）
+            amt = row.get("amount", float(row["last_price"]) * abs(qty))
+            if side == "BUY":
+                positions[code]["qty"] += qty
+                positions[code]["cost"] += float(amt)
+            else:
+                positions[code]["qty"] -= abs(qty)
+                positions[code]["cost"] -= float(amt)
+            positions[code]["last_price"] = price
+
+        # 当天收盘后快照: 只保留持有中 (qty>0) 的股票
+        hold = {}
+        for code, p in positions.items():
+            if p["qty"] > 0:
+                hold[code] = {
+                    "name": p["name"],
+                    "qty": p["qty"],
+                    "cost": round(p["cost"], 2),
+                    "price": round(p["last_price"], 3),
+                    "value": round(p["qty"] * p["last_price"], 2),
+                }
+        if hold:
+            snapshots[pd.Timestamp(ts).strftime("%Y-%m-%d")] = hold
+
+    return snapshots
+
+
+# 调仓明细表的 HTML 骨架（固定结构，JS 动态填充数据）
+TRADE_LOG_SHELL = """<div class="trade-log-toolbar">
+  <input type="text" id="tl-search" placeholder="搜索股票代码/名称..." oninput="tlRender()" class="tl-search-input">
+  <select id="tl-side-filter" onchange="tlRender()" class="tl-select">
+    <option value="">全部方向</option>
+    <option value="BUY">买入</option>
+    <option value="SELL">卖出</option>
+  </select>
+  <span class="tl-info" id="tl-info"></span>
+</div>
+<div style="overflow-x:auto;">
+  <table class="summary-table trade-log-table" id="tl-table">
+    <thead>
+      <tr>
+        <th onclick="tlSort('date')" class="sortable">日期 &#9650;&#9660;</th>
+        <th onclick="tlSort('code')" class="sortable">代码</th>
+        <th onclick="tlSort('name')" class="sortable">名称</th>
+        <th onclick="tlSort('side')" class="sortable">方向</th>
+        <th onclick="tlSort('qty')" class="sortable">数量</th>
+        <th onclick="tlSort('price')" class="sortable">价格</th>
+        <th onclick="tlSort('amount')" class="sortable">金额</th>
+        <th onclick="tlSort('cost')" class="sortable">手续费</th>
+        <th onclick="tlSort('pos')" class="sortable">持仓(累计)</th>
+      </tr>
+    </thead>
+    <tbody id="tl-tbody"></tbody>
+  </table>
+</div>
+<div class="trade-log-pager" id="tl-pager"></div>"""
+
+
+# ============================================================
 # 绩效汇总表 HTML
 # ============================================================
 def build_summary_table_html(results: dict) -> str:
@@ -1163,6 +1432,20 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
         figs["deep_worst_html"] = build_worst_days_table(pf)
         deep_figures_data[tag] = figs
 
+    # ---- 持仓与交易：每个实验 3 张图 + 调仓明细表 ----
+    print("生成持仓与交易图表...")
+    holdings_figures_data = OrderedDict()
+    for tag, data in results.items():
+        pf = data["portfolio"]
+        tr = data["trades"]
+        figs = OrderedDict()
+        figs["hold_pos"] = build_position_count_chart(pf, tr)
+        figs["hold_freq"] = build_stock_trade_freq(tr)
+        figs["hold_monthly"] = build_monthly_buysell(tr)
+        figs["hold_log_data"] = build_trade_log_data(tr)
+        figs["hold_snapshot"] = build_holdings_snapshot_data(tr)
+        holdings_figures_data[tag] = figs
+
     # ---- 构建延迟初始化数据结构 ----
     # {tab_id: [(div_id, fig_spec_json), ...]}
     tab_figures = OrderedDict()
@@ -1207,7 +1490,26 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
             else:
                 deep_figures_json[tag][chart_type] = None
 
-    deep_tags_json = _json.dumps(list(deep_figures_data.keys()), ensure_ascii=False)
+    # 持仓与交易：按 tag 嵌套的图表数据
+    holdings_figures_json = OrderedDict()
+    for tag, figs in holdings_figures_data.items():
+        holdings_figures_json[tag] = OrderedDict()
+        for chart_type, fig in figs.items():
+            if chart_type == "hold_log_data" or chart_type == "hold_snapshot":
+                # 数据在 JS 侧单独注入，这里跳过
+                pass
+            elif fig is not None:
+                holdings_figures_json[tag][chart_type] = _truncate_floats(_json.loads(fig.to_json()))
+            else:
+                holdings_figures_json[tag][chart_type] = None
+
+    # 调仓记录 + 持仓快照 raw data（直接注入 JS）
+    trade_log_json = OrderedDict()
+    for tag, figs in holdings_figures_data.items():
+        trade_log_json[tag] = {
+            "records": figs.get("hold_log_data") or [],
+            "snapshots": figs.get("hold_snapshot") or {},
+        }
 
     # ---- 构建各 Tab 的 HTML 占位 div ----
     def _make_div(div_id: str) -> str:
@@ -1272,6 +1574,50 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
     <div class="plot-container" id="deep_worst_container">
       <h3>最差 10 天收益</h3>
       <div id="deep_worst_html"></div>
+    </div>"""
+
+    # 持仓与交易
+    holdings_content = f"""<div class="deep-selector-bar">
+      <label for="holdings-selector">选择策略：</label>
+      <select id="holdings-selector" onchange="onHoldingsChange()">
+        {deep_select_options}
+      </select>
+    </div>
+    <div class="plot-container">
+      <button class="fullscreen-btn" onclick="toggleFullscreen(this.parentElement)" title="全屏">&#x26F6;</button>
+      {_make_div("hold_pos")}
+    </div>
+    <div class="plot-container">
+      <button class="fullscreen-btn" onclick="toggleFullscreen(this.parentElement)" title="全屏">&#x26F6;</button>
+      {_make_div("hold_freq")}
+    </div>
+    <div class="plot-container">
+      <button class="fullscreen-btn" onclick="toggleFullscreen(this.parentElement)" title="全屏">&#x26F6;</button>
+      {_make_div("hold_monthly")}
+    </div>
+    <div class="plot-container" id="holdings-snapshot-panel">
+      <h3>持仓快照</h3>
+      <div class="snapshot-bar">
+        <label>查看日期：</label>
+        <select id="snap-date-select" onchange="renderSnapshot()"></select>
+        <button onclick="snapNav(-1)" class="snap-nav-btn">前一天</button>
+        <button onclick="snapNav(1)" class="snap-nav-btn">后一天</button>
+        <span class="tl-info" id="snap-info"></span>
+      </div>
+      <div style="overflow-x:auto;">
+        <table class="summary-table" id="snap-table">
+          <thead>
+            <tr>
+              <th>代码</th><th>名称</th><th>持仓数量</th><th>累计成本</th><th>最新价</th><th>占比</th><th>估算市值</th>
+            </tr>
+          </thead>
+          <tbody id="snap-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="plot-container">
+      <h3>调仓记录明细</h3>
+      <div id="hold_log_html">{TRADE_LOG_SHELL}</div>
     </div>"""
 
     # 读取 plotly.js（离线内嵌）
@@ -1378,6 +1724,83 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
     .deep-selector-bar select:focus {{
       outline: none; border-color: #1a73e8; box-shadow: 0 0 0 2px rgba(26,115,232,0.15);
     }}
+    .trade-log-toolbar {{
+      display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap;
+    }}
+    .tl-search-input {{
+      padding: 8px 14px; font-size: 14px; font-family: inherit;
+      border: 1px solid #ddd; border-radius: 4px; min-width: 220px;
+    }}
+    .tl-search-input:focus {{
+      outline: none; border-color: #1a73e8; box-shadow: 0 0 0 2px rgba(26,115,232,0.15);
+    }}
+    .tl-select {{
+      padding: 8px 12px; font-size: 14px; font-family: inherit;
+      border: 1px solid #ddd; border-radius: 4px; background: white; cursor: pointer;
+    }}
+    .tl-info {{
+      font-size: 13px; color: #888; margin-left: auto;
+    }}
+    .trade-log-table {{
+      font-size: 12px;
+    }}
+    .trade-log-table th.sortable {{
+      cursor: pointer; user-select: none;
+    }}
+    .trade-log-table th.sortable:hover {{
+      background: #1a3a5a;
+    }}
+    .tl-row-buy td {{ background: #fff5f5; }}
+    .tl-row-sell td {{ background: #f5fff5; }}
+    .tl-row-buy:hover td {{ background: #ffe0e0 !important; }}
+    .tl-row-sell:hover td {{ background: #e0ffe0 !important; }}
+    .tl-side-buy {{
+      color: #d62728; font-weight: 600;
+    }}
+    .tl-side-sell {{
+      color: #2ca02c; font-weight: 600;
+    }}
+    .tl-num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+    .trade-log-pager {{
+      display: flex; align-items: center; justify-content: center; gap: 16px;
+      margin-top: 14px; font-size: 13px;
+    }}
+    .trade-log-pager button {{
+      padding: 6px 18px; border: 1px solid #ddd; border-radius: 4px;
+      background: white; cursor: pointer; font-size: 13px; font-family: inherit;
+    }}
+    .trade-log-pager button:hover:not(:disabled) {{
+      background: #1a73e8; color: white; border-color: #1a73e8;
+    }}
+    .trade-log-pager button:disabled {{
+      color: #ccc; cursor: default;
+    }}
+    #hold_log_html {{
+      overflow-x: auto;
+    }}
+    .snapshot-bar {{
+      display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;
+    }}
+    .snapshot-bar label {{
+      font-size: 14px; font-weight: 600; color: #2c3e50;
+    }}
+    .snapshot-bar select {{
+      padding: 6px 14px; font-size: 14px; font-family: inherit;
+      border: 1px solid #ddd; border-radius: 4px; background: white; cursor: pointer;
+    }}
+    .snap-nav-btn {{
+      padding: 6px 14px; border: 1px solid #ddd; border-radius: 4px;
+      background: white; cursor: pointer; font-size: 13px; font-family: inherit;
+    }}
+    .snap-nav-btn:hover {{
+      background: #1a73e8; color: white; border-color: #1a73e8;
+    }}
+    #snap-table {{
+      font-size: 13px;
+    }}
+    #snap-table tbody tr:hover {{
+      background: #f0f4ff;
+    }}
   </style>
 </head>
 <body>
@@ -1396,6 +1819,7 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
     <button class="tab-btn" onclick="switchTab(event, 'yearly')">年度分析</button>
     <button class="tab-btn" onclick="switchTab(event, 'risk')">风险收益</button>
     <button class="tab-btn" onclick="switchTab(event, 'deep')">深度分析</button>
+    <button class="tab-btn" onclick="switchTab(event, 'holdings')">持仓与交易</button>
   </div>
 
   <div class="tab-panel active" id="overview">
@@ -1430,11 +1854,17 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
     {deep_content}
   </div>
 
+  <div class="tab-panel" id="holdings">
+    {holdings_content}
+  </div>
+
   <div class="footer">RQAlpha 策略回测分析 | Powered by Plotly</div>
 
   <script>
     var FIGURES = {_json.dumps(figure_specs_json)};
     var DEEP_FIGURES = {_json.dumps(deep_figures_json, ensure_ascii=False)};
+    var HOLDINGS_FIGURES = {_json.dumps(holdings_figures_json, ensure_ascii=False)};
+    var TRADE_LOG_DATA = {_json.dumps(trade_log_json, ensure_ascii=False)};
     var _initialized = {{}};
     var _plotlyConfig = {{responsive: true, displaylogo: false}};
     var _plotlyReady = false;
@@ -1488,9 +1918,160 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
       if (sel) renderDeepCharts(sel.value);
     }}
 
+    function renderHoldingsCharts(tag) {{
+      var chartTypes = ['hold_pos', 'hold_freq', 'hold_monthly'];
+      var tagData = HOLDINGS_FIGURES[tag] || {{}};
+      chartTypes.forEach(function(ct) {{
+        var el = document.getElementById(ct);
+        if (!el) return;
+        Plotly.purge(el);
+        var spec = tagData[ct];
+        if (spec) {{
+          Plotly.newPlot(ct, spec.data, spec.layout, _plotlyConfig);
+        }}
+      }});
+      // 更新调仓明细表
+      _tlCurrentTag = tag;
+      tlRefreshData();
+      // 填充持仓快照日期选择器
+      var d = TRADE_LOG_DATA[tag];
+      var snaps = (d && d.snapshots) ? d.snapshots : {{}};
+      var dates = Object.keys(snaps).sort();
+      var sel = document.getElementById('snap-date-select');
+      if (sel) {{
+        sel.innerHTML = dates.map(function(dt) {{ return '<option value="' + dt + '">' + dt + '</option>'; }}).join('');
+        sel.value = dates.length ? dates[dates.length - 1] : '';
+      }}
+      renderSnapshot();
+    }}
+
+    function onHoldingsChange() {{
+      if (!_plotlyReady) return;
+      var sel = document.getElementById('holdings-selector');
+      if (sel) renderHoldingsCharts(sel.value);
+    }}
+
+    // ---- 调仓记录明细表 (排序/搜索/分页) ----
+    var _tlCurrentTag = '';
+    var _tlSortKey = 'date';
+    var _tlSortAsc = false;
+    var _tlPage = 0;
+    var _tlPageSize = 100;
+
+    function _tlData() {{
+      var d = TRADE_LOG_DATA[_tlCurrentTag];
+      return (d && d.records) ? d.records : [];
+    }}
+
+    window.tlSort = function(key) {{
+      if (_tlSortKey === key) {{ _tlSortAsc = !_tlSortAsc; }}
+      else {{ _tlSortKey = key; _tlSortAsc = true; }}
+      _tlPage = 0;
+      tlRender();
+    }};
+
+    window.tlRefreshData = function() {{
+      _tlSortKey = 'date'; _tlSortAsc = false; _tlPage = 0;
+      tlRender();
+    }};
+
+    window.tlRender = function() {{
+      var q = (document.getElementById('tl-search').value || '').toLowerCase();
+      var sideFilter = document.getElementById('tl-side-filter').value;
+      var data = _tlData();
+      var filtered = data.filter(function(r) {{
+        if (q && r.code.toLowerCase().indexOf(q) === -1 && r.name.toLowerCase().indexOf(q) === -1) return false;
+        if (sideFilter && r.side !== sideFilter) return false;
+        return true;
+      }});
+      var sk = _tlSortKey;
+      filtered.sort(function(a, b) {{
+        var va = a[sk], vb = b[sk];
+        if (typeof va === 'string') return _tlSortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+        return _tlSortAsc ? va - vb : vb - va;
+      }});
+      var infoEl = document.getElementById('tl-info');
+      if (infoEl) infoEl.textContent = '共 ' + filtered.length + ' 笔交易';
+
+      var totalPages = Math.ceil(filtered.length / _tlPageSize);
+      if (_tlPage >= totalPages) _tlPage = Math.max(0, totalPages - 1);
+      var page = filtered.slice(_tlPage * _tlPageSize, (_tlPage + 1) * _tlPageSize);
+      var tbody = document.getElementById('tl-tbody');
+      if (!tbody) return;
+      tbody.innerHTML = page.map(function(r) {{
+        return '<tr class="tl-row-' + r.side.toLowerCase() + '">' +
+          '<td>' + r.date + '</td>' +
+          '<td>' + r.code + '</td>' +
+          '<td>' + r.name + '</td>' +
+          '<td class="tl-side-' + r.side.toLowerCase() + '">' + (r.side === 'BUY' ? '买' : '卖') + '</td>' +
+          '<td class="tl-num">' + r.qty.toLocaleString() + '</td>' +
+          '<td class="tl-num">' + r.price.toFixed(3) + '</td>' +
+          '<td class="tl-num">' + r.amount.toLocaleString(undefined, {{minimumFractionDigits:2}}) + '</td>' +
+          '<td class="tl-num">' + r.cost.toFixed(4) + '</td>' +
+          '<td class="tl-num"><b>' + (r.pos || 0).toLocaleString() + '</b></td>' +
+          '</tr>';
+      }}).join('');
+
+      var pager = document.getElementById('tl-pager');
+      if (!pager) return;
+      if (totalPages <= 1) {{ pager.innerHTML = ''; }}
+      else {{
+        var html = '<button onclick="tlGoPage(' + (_tlPage-1) + ')" ' + (_tlPage===0?'disabled':'') + '>上一页</button>';
+        html += '<span> ' + (_tlPage+1) + ' / ' + totalPages + ' </span>';
+        html += '<button onclick="tlGoPage(' + (_tlPage+1) + ')" ' + (_tlPage>=totalPages-1?'disabled':'') + '>下一页</button>';
+        pager.innerHTML = html;
+      }}
+    }};
+
+    window.tlGoPage = function(p) {{
+      _tlPage = p;
+      tlRender();
+    }};
+
+    // ---- 持仓快照 ----
+    window.renderSnapshot = function() {{
+      var sel = document.getElementById('snap-date-select');
+      if (!sel || !sel.value) return;
+      var date = sel.value;
+      var d = TRADE_LOG_DATA[_tlCurrentTag];
+      var snaps = (d && d.snapshots) ? d.snapshots : {{}};
+      var hold = snaps[date] || {{}};
+      var codes = Object.keys(hold).sort();
+      var totalValue = 0;
+      codes.forEach(function(c) {{ totalValue += hold[c].value || 0; }});
+      var rows = [];
+      codes.forEach(function(c) {{
+        var h = hold[c];
+        var pct = totalValue > 0 ? (h.value || 0) / totalValue * 100 : 0;
+        rows.push(
+          '<tr>' +
+          '<td>' + c + '</td>' +
+          '<td>' + (h.name || '') + '</td>' +
+          '<td class="tl-num">' + (h.qty || 0).toLocaleString() + '</td>' +
+          '<td class="tl-num">' + (h.cost || 0).toLocaleString(undefined, {{minimumFractionDigits:2}}) + '</td>' +
+          '<td class="tl-num">' + (h.price || 0).toFixed(3) + '</td>' +
+          '<td class="tl-num"><b>' + pct.toFixed(1) + '%</b></td>' +
+          '<td class="tl-num">' + (h.value || 0).toLocaleString(undefined, {{minimumFractionDigits:2}}) + '</td>' +
+          '</tr>'
+        );
+      }});
+      document.getElementById('snap-tbody').innerHTML = rows.join('');
+      document.getElementById('snap-info').textContent = '共持有 ' + codes.length + ' 只股票，估算市值 ' + totalValue.toLocaleString(undefined, {{maximumFractionDigits:0}});
+    }};
+
+    window.snapNav = function(dir) {{
+      var sel = document.getElementById('snap-date-select');
+      if (!sel || sel.options.length === 0) return;
+      var idx = sel.selectedIndex + dir;
+      if (idx < 0) idx = 0;
+      if (idx >= sel.options.length) idx = sel.options.length - 1;
+      sel.selectedIndex = idx;
+      renderSnapshot();
+    }};
+
     function ensurePlots(tabName) {{
       if (!_plotlyReady) return;
-      if (_initialized[tabName] && tabName !== 'deep') {{
+      if (_initialized[tabName] && tabName !== 'deep' && tabName !== 'holdings') {{
         var panel = document.getElementById(tabName);
         if (panel) {{
           panel.querySelectorAll('.plotly-graph-div').forEach(function(el) {{
@@ -1500,11 +2081,17 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
         }}
         return;
       }}
-      if (tabName === 'deep') {{
-        // deep tab 不设 initialized 标记，允许切换下拉重新渲染
-        var sel = document.getElementById('deep-selector');
-        var tag = sel ? sel.value : '';
-        if (tag) renderDeepCharts(tag);
+      if (tabName === 'deep' || tabName === 'holdings') {{
+        // 深度/持仓 tab 不设 initialized 标记，允许切换下拉重新渲染
+        if (tabName === 'deep') {{
+          var sel = document.getElementById('deep-selector');
+          var tag = sel ? sel.value : '';
+          if (tag) renderDeepCharts(tag);
+        }} else {{
+          var sel = document.getElementById('holdings-selector');
+          var tag = sel ? sel.value : '';
+          if (tag) renderHoldingsCharts(tag);
+        }}
         return;
       }}
       _initialized[tabName] = true;
