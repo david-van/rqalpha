@@ -149,7 +149,7 @@ def generate_report(pkl_path, output_html=None, title=None, show_terminal=True):
 #  配 置 区 - 修改这里的参数即可
 # ============================================================
 CONFIG = {
-    "pkl_path":       "batch_results/lihai_pool/dynamic_pool.pkl",   # pkl 文件路径
+    "pkl_path":       "batch_results/xiaoe_pool/equal_weight.pkl",   # pkl 文件路径
     "output_html":    None,                            # 输出 HTML 路径，None=自动生成
     "title":          None,                            # 报告标题，None=自动提取
     "show_terminal":  True,                            # 是否打印终端摘要

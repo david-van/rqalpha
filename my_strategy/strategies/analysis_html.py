@@ -30,7 +30,7 @@ TRADING_DAYS_PER_YEAR = 250
 # 配置
 # ============================================================
 RESULT_DIR = Path(__file__).with_name("batch_results")
-RESULT_DIR = RESULT_DIR.joinpath("lihai_pool")
+RESULT_DIR = RESULT_DIR.joinpath("xiaoe_pool")
 
 # 颜色方案：尽量接近原 matplotlib tab10
 COLORS = [
@@ -883,6 +883,223 @@ def build_risk_return_figure(results: dict) -> go.Figure:
 
 
 # ============================================================
+# Tab 7: 深度分析 — 单策略 4 张核心图表
+# ============================================================
+
+def _get_daily_returns(portfolio: pd.DataFrame) -> pd.Series | None:
+    """从 portfolio 提取日收益率序列，统一处理 DatetimeIndex"""
+    if portfolio.empty or "unit_net_value" not in portfolio.columns:
+        return None
+    nv = portfolio["unit_net_value"].dropna()
+    if len(nv) < 5:
+        return None
+    if not isinstance(nv.index, pd.DatetimeIndex):
+        nv.index = pd.to_datetime(nv.index)
+    return nv.pct_change().dropna()
+
+
+def build_monthly_heatmap(portfolio: pd.DataFrame) -> go.Figure | None:
+    """月度收益热力图：行=年份，列=月份，色阶 RdYlGn"""
+    daily_ret = _get_daily_returns(portfolio)
+    if daily_ret is None:
+        return None
+
+    monthly = daily_ret.resample("ME").apply(lambda x: (1 + x).prod() - 1)
+    if monthly.empty:
+        return None
+
+    records = []
+    for dt, ret in monthly.items():
+        records.append({"year": dt.year, "month": dt.month, "return": ret})
+    df = pd.DataFrame(records)
+    pivot = df.pivot_table(index="year", columns="month", values="return", sort=False)
+
+    all_months = list(range(1, 13))
+    pivot = pivot.reindex(columns=all_months)
+    years = pivot.index.tolist()
+
+    z = pivot.values
+    text = [[f"{v:.1%}" if not np.isnan(v) else "" for v in row] for row in z]
+    month_labels = [f"{m}月" for m in all_months]
+
+    fig = go.Figure()
+    fig.add_trace(go.Heatmap(
+        z=z, x=month_labels, y=[str(y) for y in years],
+        text=text, texttemplate="%{text}", textfont=dict(size=11),
+        colorscale="RdYlGn", zmid=0,
+        showscale=True, colorbar=dict(title="收益", tickformat=".0%"),
+        hovertemplate="%{y}年 %{x}<br>收益: %{z:.2%}<extra></extra>",
+    ))
+    fig.update_layout(
+        title=dict(text="月度收益热力图", font=dict(size=14)),
+        xaxis=dict(title="月份", side="bottom"),
+        yaxis=dict(title="年份", autorange="reversed"),
+        autosize=True, height=400, margin=dict(t=40, b=40, l=40, r=20),
+    )
+    return fig
+
+
+def build_returns_distribution(portfolio: pd.DataFrame) -> go.Figure | None:
+    """日收益分布直方图 + 正态拟合曲线"""
+    daily_ret = _get_daily_returns(portfolio)
+    if daily_ret is None:
+        return None
+
+    values = daily_ret.values
+    mu, std = np.mean(values), np.std(values)
+    from scipy.stats import skew, kurtosis  # noqa
+    from scipy.stats import norm as scipy_norm
+
+    x_norm = np.linspace(mu - 4 * std, mu + 4 * std, 200)
+    pdf_norm = scipy_norm.pdf(x_norm, mu, std)
+
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(
+        x=values, histnorm="percent", nbinsx=80,
+        name="日收益分布", marker=dict(color="#4a90d9", line=dict(color="white", width=0.5)),
+        hovertemplate="收益: %{x:.3%}<br>比例: %{y:.1f}%<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=x_norm, y=pdf_norm * 100 * (x_norm[1] - x_norm[0]) * len(values) / (len(values) / 100),
+        mode="lines", name="正态拟合", line=dict(color="#d62728", width=2, dash="dash"),
+        hovertemplate="正态拟合<extra></extra>",
+    ))
+
+    # 将实际直方图 bin 分布和正态拟合的差异重新绘制
+    # 使用 method 2: 用密度归一化
+    fig.data = ()
+    fig.add_trace(go.Histogram(
+        x=values, histnorm="probability density", nbinsx=80,
+        name="日收益分布", marker=dict(color="#4a90d9", line=dict(color="white", width=0.5)),
+        hovertemplate="收益: %{x:.3%}<br>密度: %{y:.2f}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=x_norm, y=pdf_norm, mode="lines",
+        name="正态拟合", line=dict(color="#d62728", width=2, dash="dash"),
+        hovertemplate="正态拟合<extra></extra>",
+    ))
+
+    s = skew(values, bias=False)
+    k = kurtosis(values, bias=False)
+
+    fig.update_layout(
+        title=dict(text=f"日收益分布 (μ={mu:.4%}, σ={std:.4%}, 偏度={s:.2f}, 峰度={k:.2f})", font=dict(size=14)),
+        xaxis=dict(title="日收益率", tickformat=".1%"),
+        yaxis=dict(title="概率密度"),
+        autosize=True, height=420, margin=dict(t=55, b=40, l=40, r=20),
+        legend=dict(x=0.75, y=0.95),
+    )
+    return fig
+
+
+def build_underwater_plot(portfolio: pd.DataFrame) -> go.Figure | None:
+    """回撤水深图：面积填充 + 标记最大回撤"""
+    if portfolio.empty or "unit_net_value" not in portfolio.columns:
+        return None
+    nv = portfolio["unit_net_value"].dropna()
+    if len(nv) < 5:
+        return None
+    if not isinstance(nv.index, pd.DatetimeIndex):
+        nv.index = pd.to_datetime(nv.index)
+
+    dd = compute_drawdown_series(nv)
+
+    min_idx = dd.idxmin()
+    min_val = dd.min()
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=dd.index, y=dd.values, mode="lines",
+        fill="tozeroy", fillcolor="rgba(214,39,40,0.25)",
+        line=dict(color="#d62728", width=1.2),
+        name="回撤深度",
+        hovertemplate="%{x|%Y-%m-%d}<br>回撤: %{y:.2%}<extra></extra>",
+    ))
+    # 零线水平标记
+    fig.add_hline(y=0, line=dict(color="gray", width=0.5, dash="dot"))
+
+    # 标注最深回撤点
+    fig.add_trace(go.Scatter(
+        x=[min_idx], y=[min_val], mode="markers+text",
+        name="最大回撤",
+        marker=dict(color="red", size=12, symbol="x-thin", line=dict(width=2)),
+        text=[f" {min_idx.strftime('%Y-%m-%d')}<br> {min_val:.2%}"],
+        textposition="bottom right", textfont=dict(size=10, color="red"),
+        showlegend=False,
+        hovertemplate="最大回撤<br>%{x|%Y-%m-%d}<br>%{y:.2%}<extra></extra>",
+    ))
+
+    fig.update_layout(
+        title=dict(text=f"回撤水深图 (最大回撤 {min_val:.2%})", font=dict(size=14)),
+        yaxis=dict(title="回撤", tickformat=".0%"),
+        autosize=True, height=420, margin=dict(t=55, b=40, l=40, r=20),
+        showlegend=False,
+    )
+    return fig
+
+
+def build_rolling_and_worst(portfolio: pd.DataFrame) -> go.Figure | None:
+    """双轴：滚动年化夏普 + 滚动年化波动率，附带 worst-N 天文本"""
+    daily_ret = _get_daily_returns(portfolio)
+    if daily_ret is None:
+        return None
+
+    window = min(TRADING_DAYS_PER_YEAR, len(daily_ret) // 2)
+    if window < 20:
+        return None
+
+    rolling_mean = daily_ret.rolling(window).mean() * TRADING_DAYS_PER_YEAR
+    rolling_std = daily_ret.rolling(window).std() * np.sqrt(TRADING_DAYS_PER_YEAR)
+    rolling_sharpe = rolling_mean / rolling_std.replace(0, np.nan)
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(
+        go.Scatter(
+            x=rolling_sharpe.index, y=rolling_sharpe.values, mode="lines",
+            name="滚动夏普", line=dict(color="#1f77b4", width=1.2),
+            hovertemplate="%{x|%Y-%m-%d}<br>滚动夏普: %{y:.3f}<extra></extra>",
+        ),
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=rolling_std.index, y=rolling_std.values, mode="lines",
+            name="滚动波动率", line=dict(color="#ff7f0e", width=1.2, dash="dash"),
+            hovertemplate="%{x|%Y-%m-%d}<br>滚动波动率: %{y:.3%}<extra></extra>",
+        ),
+        secondary_y=True,
+    )
+    fig.update_yaxes(title_text="滚动夏普", secondary_y=False)
+    fig.update_yaxes(title_text="滚动波动率", tickformat=".0%", secondary_y=True)
+
+    fig.update_layout(
+        title=dict(text=f"滚动 {window} 日夏普 & 波动率", font=dict(size=14)),
+        hovermode="closest",
+        autosize=True, height=420, margin=dict(t=55, b=40, l=40, r=40),
+        legend=dict(x=0.75, y=0.95),
+    )
+    fig.add_hline(y=0, line=dict(color="gray", width=0.5), secondary_y=False)
+    return fig
+
+
+def build_worst_days_table(portfolio: pd.DataFrame, n: int = 10) -> str:
+    """生成最差 N 天 HTML 表格"""
+    daily_ret = _get_daily_returns(portfolio)
+    if daily_ret is None:
+        return "<p>无数据</p>"
+
+    worst = daily_ret.nsmallest(n)
+    rows = ""
+    for dt, ret in worst.items():
+        rows += f"<tr><td>{dt.strftime('%Y-%m-%d')}</td><td>{ret:.4%}</td></tr>"
+
+    return f"""<table class="summary-table">
+<thead><tr><th>日期</th><th>收益率</th></tr></thead>
+<tbody>{rows}</tbody>
+</table>"""
+
+
+# ============================================================
 # 绩效汇总表 HTML
 # ============================================================
 def build_summary_table_html(results: dict) -> str:
@@ -933,6 +1150,19 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
     # Summary 表格
     summary_table_html = build_summary_table_html(results)
 
+    # ---- 深度分析：每个实验单独生成 4 张图 + worst days 表 ----
+    print("生成深度分析图表...")
+    deep_figures_data = OrderedDict()
+    for tag, data in results.items():
+        pf = data["portfolio"]
+        figs = OrderedDict()
+        figs["deep_monthly"] = build_monthly_heatmap(pf)
+        figs["deep_dist"] = build_returns_distribution(pf)
+        figs["deep_underwater"] = build_underwater_plot(pf)
+        figs["deep_rolling"] = build_rolling_and_worst(pf)
+        figs["deep_worst_html"] = build_worst_days_table(pf)
+        deep_figures_data[tag] = figs
+
     # ---- 构建延迟初始化数据结构 ----
     # {tab_id: [(div_id, fig_spec_json), ...]}
     tab_figures = OrderedDict()
@@ -965,6 +1195,20 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
         for div_id, fig in specs:
             figure_specs_json[div_id] = _truncate_floats(_json.loads(fig.to_json()))
 
+    # 深度分析：按 tag 嵌套的图表数据
+    deep_figures_json = OrderedDict()
+    for tag, figs in deep_figures_data.items():
+        deep_figures_json[tag] = OrderedDict()
+        for chart_type, fig in figs.items():
+            if chart_type == "deep_worst_html":
+                deep_figures_json[tag][chart_type] = fig  # HTML 字符串
+            elif fig is not None:
+                deep_figures_json[tag][chart_type] = _truncate_floats(_json.loads(fig.to_json()))
+            else:
+                deep_figures_json[tag][chart_type] = None
+
+    deep_tags_json = _json.dumps(list(deep_figures_data.keys()), ensure_ascii=False)
+
     # ---- 构建各 Tab 的 HTML 占位 div ----
     def _make_div(div_id: str) -> str:
         return f'<div id="{div_id}" class="plotly-graph-div"></div>'
@@ -992,6 +1236,43 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
         yearly_content = "<p class='no-data'>无逐年数据</p>"
 
     risk_content = _make_plot_container("rr_main")
+
+    # 深度分析：第一个实验的默认 chart 数据 + 下拉框
+    first_tag = tags[0] if tags else ""
+    deep_select_options = "\n".join(
+        '<option value="{v}" {sel}>{t}</option>'.format(
+            v=_json.dumps(t, ensure_ascii=False).strip('"'),
+            sel="selected" if t == first_tag else "",
+            t=t,
+        )
+        for t in tags
+    )
+    deep_content = f"""<div class="deep-selector-bar">
+      <label for="deep-selector">选择策略：</label>
+      <select id="deep-selector" onchange="onDeepChange()">
+        {deep_select_options}
+      </select>
+    </div>
+    <div class="plot-container">
+      <button class="fullscreen-btn" onclick="toggleFullscreen(this.parentElement)" title="全屏">&#x26F6;</button>
+      {_make_div("deep_monthly")}
+    </div>
+    <div class="plot-container">
+      <button class="fullscreen-btn" onclick="toggleFullscreen(this.parentElement)" title="全屏">&#x26F6;</button>
+      {_make_div("deep_dist")}
+    </div>
+    <div class="plot-container">
+      <button class="fullscreen-btn" onclick="toggleFullscreen(this.parentElement)" title="全屏">&#x26F6;</button>
+      {_make_div("deep_underwater")}
+    </div>
+    <div class="plot-container">
+      <button class="fullscreen-btn" onclick="toggleFullscreen(this.parentElement)" title="全屏">&#x26F6;</button>
+      {_make_div("deep_rolling")}
+    </div>
+    <div class="plot-container" id="deep_worst_container">
+      <h3>最差 10 天收益</h3>
+      <div id="deep_worst_html"></div>
+    </div>"""
 
     # 读取 plotly.js（离线内嵌）
     plotly_js = get_plotlyjs()
@@ -1081,6 +1362,22 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
     .no-data {{
       text-align: center; color: #999; padding: 40px; font-size: 14px;
     }}
+    .deep-selector-bar {{
+      display: flex; align-items: center; gap: 12px;
+      background: white; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      padding: 14px 20px; margin-bottom: 20px;
+    }}
+    .deep-selector-bar label {{
+      font-size: 14px; font-weight: 600; color: #2c3e50;
+    }}
+    .deep-selector-bar select {{
+      padding: 8px 16px; font-size: 14px; font-family: inherit;
+      border: 1px solid #ddd; border-radius: 4px;
+      background: white; cursor: pointer; min-width: 280px;
+    }}
+    .deep-selector-bar select:focus {{
+      outline: none; border-color: #1a73e8; box-shadow: 0 0 0 2px rgba(26,115,232,0.15);
+    }}
   </style>
 </head>
 <body>
@@ -1098,6 +1395,7 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
     <button class="tab-btn" onclick="switchTab(event, 'trades')">交易分析</button>
     <button class="tab-btn" onclick="switchTab(event, 'yearly')">年度分析</button>
     <button class="tab-btn" onclick="switchTab(event, 'risk')">风险收益</button>
+    <button class="tab-btn" onclick="switchTab(event, 'deep')">深度分析</button>
   </div>
 
   <div class="tab-panel active" id="overview">
@@ -1128,10 +1426,15 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
     {risk_content}
   </div>
 
+  <div class="tab-panel" id="deep">
+    {deep_content}
+  </div>
+
   <div class="footer">RQAlpha 策略回测分析 | Powered by Plotly</div>
 
   <script>
     var FIGURES = {_json.dumps(figure_specs_json)};
+    var DEEP_FIGURES = {_json.dumps(deep_figures_json, ensure_ascii=False)};
     var _initialized = {{}};
     var _plotlyConfig = {{responsive: true, displaylogo: false}};
     var _plotlyReady = false;
@@ -1160,15 +1463,48 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
       }}
     }});
 
+    function renderDeepCharts(tag) {{
+      var chartTypes = ['deep_monthly', 'deep_dist', 'deep_underwater', 'deep_rolling'];
+      var tagData = DEEP_FIGURES[tag] || {{}};
+      chartTypes.forEach(function(ct) {{
+        var el = document.getElementById(ct);
+        if (!el) return;
+        Plotly.purge(el);
+        var spec = tagData[ct];
+        if (spec) {{
+          Plotly.newPlot(ct, spec.data, spec.layout, _plotlyConfig);
+        }}
+      }});
+      // 更新 worst days 表格
+      var worstEl = document.getElementById('deep_worst_html');
+      if (worstEl) {{
+        worstEl.innerHTML = (tagData['deep_worst_html'] || '<p class=no-data>无数据</p>');
+      }}
+    }}
+
+    function onDeepChange() {{
+      if (!_plotlyReady) return;
+      var sel = document.getElementById('deep-selector');
+      if (sel) renderDeepCharts(sel.value);
+    }}
+
     function ensurePlots(tabName) {{
       if (!_plotlyReady) return;
-      if (_initialized[tabName]) {{
+      if (_initialized[tabName] && tabName !== 'deep') {{
         var panel = document.getElementById(tabName);
         if (panel) {{
           panel.querySelectorAll('.plotly-graph-div').forEach(function(el) {{
+            if (el.id && el.id.startsWith('deep_')) return;
             Plotly.Plots.resize(el);
           }});
         }}
+        return;
+      }}
+      if (tabName === 'deep') {{
+        // deep tab 不设 initialized 标记，允许切换下拉重新渲染
+        var sel = document.getElementById('deep-selector');
+        var tag = sel ? sel.value : '';
+        if (tag) renderDeepCharts(tag);
         return;
       }}
       _initialized[tabName] = true;
