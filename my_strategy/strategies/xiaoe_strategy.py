@@ -100,6 +100,7 @@ DEFAULT_PARAMS = {
     'mode': 'momentum_weighted',
     'top_n': 2,
     'm_days': 25,
+    'ema_days': 60,
     'decay_ratio': 1.0,
     'switch_threshold': 1.0,
     'rebalance_days': 5,   # 无池变化时，至少间隔 N 个交易日才调仓 (momentum 模式)
@@ -130,6 +131,8 @@ def init(context):
     context.old_pool = []           # buy_and_hold 模式追踪上一期池子
     context.targets = {}
     context.pending_targets = None  # targets to execute today only
+    context.ema_pending_targets = {}
+    context.stock_slots = {}        # per-stock cash slot for buy_and_hold_ema60
     context.last_rebalance = None   # 上次调仓日期
     context.pool_changed = True     # 首日强制调仓
 
@@ -243,6 +246,201 @@ def _compute_buy_and_hold(context):
     return targets
 
 
+def _position_quantity(pos):
+    return getattr(pos, 'quantity', 0) if pos else 0
+
+
+def _position_market_value(pos):
+    return getattr(pos, 'market_value', 0.0) if pos else 0.0
+
+
+def _is_holding(context, code):
+    pos = context.portfolio.positions.get(code)
+    return _position_quantity(pos) > 0
+
+
+def _slot_cash(context, code):
+    slot = context.stock_slots.setdefault(code, {'cash': 0.0})
+    return float(slot.get('cash', 0.0))
+
+
+def _set_slot_cash(context, code, value):
+    context.stock_slots.setdefault(code, {'cash': 0.0})['cash'] = max(0.0, float(value))
+
+
+def _ema_signal(context, code):
+    """Return True if close is above EMA, False if below, None if data is not enough."""
+    ema_days = int(context.params.get('ema_days', 60))
+    close = history_bars(code, ema_days + 1, '1d', 'close', adjust_type='pre')
+    if close is None or len(close) < ema_days:
+        return None
+
+    close = pd.Series(np.asarray(close, dtype=float))
+    ema = close.ewm(span=ema_days, adjust=False).mean().iloc[-1]
+    return float(close.iloc[-1]) >= float(ema)
+
+
+def _ema_account_value(context, code):
+    pos = context.portfolio.positions.get(code)
+    if _position_quantity(pos) > 0:
+        return float(_position_market_value(pos))
+    return _slot_cash(context, code)
+
+
+def _reduce_ema_account(context, code, value):
+    if value <= 0:
+        return
+
+    if _is_holding(context, code):
+        pos = context.portfolio.positions.get(code)
+        target_value = max(0.0, _position_market_value(pos) - value)
+        order_target_value(code, target_value)
+        logger.info(f"[ema60-slot] reduce {code} to {target_value:.2f}")
+    else:
+        _set_slot_cash(context, code, _slot_cash(context, code) - value)
+
+
+def _add_ema_account(context, code, value):
+    if value <= 0:
+        return
+
+    if _is_holding(context, code):
+        pos = context.portfolio.positions.get(code)
+        context.ema_pending_targets[code] = _position_market_value(pos) + value
+    else:
+        _set_slot_cash(context, code, _slot_cash(context, code) + value)
+
+
+def _sync_buy_and_hold_ema60_pool(context):
+    """Handle pool changes while keeping each stock's EMA cash slot isolated."""
+    context.ema_pending_targets = {}
+    context.stock_slots = getattr(context, 'stock_slots', {}) or {}
+
+    new_pool = list(context.pool)
+    old_pool = list(getattr(context, 'old_pool', []) or [])
+
+    if not new_pool:
+        holdings = [c for c in context.portfolio.positions
+                    if context.portfolio.positions[c].quantity > 0]
+        for code in holdings:
+            order_target_value(code, 0)
+            logger.info(f"[ema60-slot] sell removed {code}")
+        context.stock_slots.clear()
+        context.old_pool = []
+        context.pool_changed = False
+        context.last_rebalance = context.now
+        return
+
+    if not old_pool:
+        cash_per_stock = context.portfolio.total_value / len(new_pool)
+        for code in new_pool:
+            _set_slot_cash(context, code, cash_per_stock)
+        context.old_pool = list(new_pool)
+        context.pool_changed = False
+        context.last_rebalance = context.now
+        return
+
+    removed = [s for s in old_pool if s not in new_pool]
+    kept = [s for s in old_pool if s in new_pool]
+    added = [s for s in new_pool if s not in old_pool]
+
+    if not removed and not added:
+        context.old_pool = list(new_pool)
+        context.pool_changed = False
+        return
+
+    old_cash_slots = sum(_slot_cash(context, s) for s in old_pool if not _is_holding(context, s))
+    unassigned_cash = max(0.0, context.portfolio.cash - old_cash_slots)
+    removed_value = sum(_ema_account_value(context, s) for s in removed)
+    available_value = removed_value + unassigned_cash
+
+    for code in removed:
+        if _is_holding(context, code):
+            order_target_value(code, 0)
+            logger.info(f"[ema60-slot] sell removed {code}")
+        context.stock_slots.pop(code, None)
+
+    target_new_value = context.portfolio.total_value / len(new_pool)
+    needed_value = target_new_value * len(added)
+
+    for code in added:
+        _set_slot_cash(context, code, target_new_value)
+
+    if added and needed_value > available_value:
+        shortfall = needed_value - available_value
+        if kept:
+            per_deduct = shortfall / len(kept)
+            for code in kept:
+                _reduce_ema_account(context, code, per_deduct)
+        else:
+            per_added = available_value / len(added) if added else 0.0
+            for code in added:
+                _set_slot_cash(context, code, per_added)
+    else:
+        surplus = available_value - needed_value
+        if surplus > 0.0001 and kept:
+            per_extra = surplus / len(kept)
+            for code in kept:
+                _add_ema_account(context, code, per_extra)
+
+    context.old_pool = list(new_pool)
+    context.pool_changed = False
+    context.last_rebalance = context.now
+
+
+def _sell_buy_and_hold_ema60(context):
+    _sync_buy_and_hold_ema60_pool(context)
+
+    pending = getattr(context, 'ema_pending_targets', {}) or {}
+    pool_set = set(context.pool)
+
+    holdings = [c for c in context.portfolio.positions
+                if context.portfolio.positions[c].quantity > 0]
+    for code in holdings:
+        if code not in pool_set:
+            order_target_value(code, 0)
+            logger.info(f"[ema60-slot] sell non-pool {code}")
+
+    for code in context.pool:
+        context.stock_slots.setdefault(code, {'cash': 0.0})
+        above = _ema_signal(context, code)
+        if above is None:
+            if not _is_holding(context, code):
+                pending.pop(code, None)
+            continue
+
+        if _is_holding(context, code):
+            if above:
+                continue
+            pos = context.portfolio.positions.get(code)
+            _set_slot_cash(context, code, _position_market_value(pos))
+            pending.pop(code, None)
+            order_target_value(code, 0)
+            logger.info(f"[ema60-slot] sell below ema {code}")
+        elif above and _slot_cash(context, code) > 0:
+            pending[code] = _slot_cash(context, code)
+
+    context.ema_pending_targets = pending
+
+
+def _buy_buy_and_hold_ema60(context):
+    targets = getattr(context, 'ema_pending_targets', None)
+    if not targets:
+        return
+
+    pool_set = set(context.pool)
+    for code, target_value in list(targets.items()):
+        if code not in pool_set or target_value <= 0:
+            continue
+        if _ema_signal(context, code) is not True:
+            continue
+        order_target_value(code, target_value)
+        _set_slot_cash(context, code, 0.0)
+        logger.info(f"[ema60-slot] buy above ema {code} value {target_value:.2f}")
+
+    context.ema_pending_targets = {}
+
+
 def _compute_targets(context):
     """根据模式计算目标权重 {code: weight}"""
     mode = context.params['mode']
@@ -338,6 +536,10 @@ def _should_rebalance(context):
 
 def sell_trade(context, bar_dict):
     """计算目标并卖出非持有标的"""
+    if context.params['mode'] == 'buy_and_hold_ema60':
+        _sell_buy_and_hold_ema60(context)
+        return
+
     if not _should_rebalance(context):
         context.pending_targets = None
         return
@@ -363,6 +565,10 @@ def sell_trade(context, bar_dict):
 
 def buy_trade(context, bar_dict):
     """按目标权重买入"""
+    if context.params['mode'] == 'buy_and_hold_ema60':
+        _buy_buy_and_hold_ema60(context)
+        return
+
     targets = getattr(context, 'pending_targets', None)
     if targets is None:
         return

@@ -95,8 +95,9 @@ def _override(mode, **kw):
 
 # ── 模式1: 对比（2 组）── buy_and_hold vs equal_weight
 EXPERIMENTS = [
-    ("buy_and_hold",     _override("buy_and_hold")),
-    ("equal_weight",     _override("equal_weight")),
+    # ("buy_and_hold",     _override("buy_and_hold")),
+    ("buy_and_hold_ema60", _override("buy_and_hold_ema60", ema_days=20)),
+    # ("equal_weight",     _override("equal_weight")),
 ]
 
 # ── 模式2: momentum_top 参数扫描（m_days × top_n，21 组）──
