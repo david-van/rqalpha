@@ -12,6 +12,7 @@ import warnings
 from datetime import datetime
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -31,6 +32,10 @@ TRADING_DAYS_PER_YEAR = 250
 # ============================================================
 RESULT_DIR = Path(__file__).with_name("batch_results")
 RESULT_DIR = RESULT_DIR.joinpath("xiaoe_pool")
+
+# Bundle 日线数据路径
+BUNDLE_PATH = Path("D:/datas/bundle/stocks.h5")
+_STOCK_DATA_CACHE = {}  # (code, start, end) → DataFrame
 
 # 颜色方案：尽量接近原 matplotlib tab10
 COLORS = [
@@ -1185,6 +1190,148 @@ def build_position_count_chart(portfolio: pd.DataFrame, trades: pd.DataFrame) ->
     return fig
 
 
+def _read_stock_daily(code: str, start_dt, end_dt) -> pd.DataFrame | None:
+    """从本地 bundle 读取个股日线数据，模块级缓存"""
+    start_str = pd.Timestamp(start_dt).strftime("%Y%m%d")
+    end_str = pd.Timestamp(end_dt).strftime("%Y%m%d")
+    cache_key = (code, start_str, end_str)
+    if cache_key in _STOCK_DATA_CACHE:
+        return _STOCK_DATA_CACHE[cache_key].copy()
+
+    if not BUNDLE_PATH.exists():
+        return None
+
+    try:
+        with h5py.File(BUNDLE_PATH, "r") as f:
+            if code not in f:
+                return None
+            ds = f[code]
+            arr = ds[:]
+            df = pd.DataFrame({
+                name: arr[name] for name in ds.dtype.names
+            })
+        df["datetime"] = pd.to_datetime(df["datetime"].astype(str), format="%Y%m%d%H%M%S")
+        df = df.set_index("datetime").sort_index()
+        df = df.loc[start_dt:end_dt]
+        if df.empty:
+            return None
+        _STOCK_DATA_CACHE[cache_key] = df
+        return df.copy()
+    except Exception:
+        return None
+
+
+def build_stock_kline_chart(trades: pd.DataFrame, code: str) -> go.Figure | None:
+    """个股K线图：蜡烛图 + EMA20/50/60/120 + 买卖点标记 + 成交量副图"""
+    stock_trades = trades[trades["order_book_id"] == code].copy()
+    if stock_trades.empty:
+        return None
+    if not isinstance(stock_trades.index, pd.DatetimeIndex):
+        stock_trades.index = pd.to_datetime(stock_trades.index)
+
+    stock_trades = stock_trades.sort_index()
+    t0, t1 = stock_trades.index[0], stock_trades.index[-1]
+    # 起始留 padding 给 EMA 计算，结束延后 120 个交易日
+    margin = pd.Timedelta(days=300)
+    t1_ext = t1 + pd.Timedelta(days=200)  # 约120个交易日
+    df = _read_stock_daily(code, t0 - margin, t1_ext)
+    if df is None or df.empty:
+        return None
+
+    # EMA
+    for span in [20, 50, 60, 120]:
+        df[f"ema_{span}"] = df["close"].ewm(span=span, min_periods=span).mean()
+
+    ema_colors = {"ema_20": "#ff7f0e", "ema_50": "#2ca02c", "ema_60": "#1f77b4", "ema_120": "#9467bd"}
+
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True,
+        vertical_spacing=0.03, row_heights=[0.68, 0.32],
+    )
+
+    # 蜡烛图
+    fig.add_trace(go.Candlestick(
+        x=df.index, open=df["open"], high=df["high"],
+        low=df["low"], close=df["close"],
+        name="K线", increasing=dict(line=dict(color="#d62728"), fillcolor="#d62728"),
+        decreasing=dict(line=dict(color="#2ca02c"), fillcolor="#2ca02c"),
+        hovertemplate="%{x|%Y-%m-%d}<br>开: %{open:.3f}<br>高: %{high:.3f}<br>低: %{low:.3f}<br>收: %{close:.3f}<extra></extra>",
+    ), row=1, col=1)
+
+    # EMA 线
+    for col, color in ema_colors.items():
+        label = col.replace("ema_", "EMA")
+        visible = col != "ema_120"
+        fig.add_trace(go.Scatter(
+            x=df.index, y=df[col], mode="lines",
+            name=label, line=dict(color=color, width=1.2),
+            visible=visible,
+            legendgroup=label,
+            hovertemplate=f"{label}: %{{y:.3f}}<extra></extra>",
+        ), row=1, col=1)
+
+    # 买点 ▲
+    buys = stock_trades[stock_trades["side"] == "BUY"]
+    if not buys.empty:
+        # 获取买入日期在日线中的收盘价作为标记Y坐标
+        buy_y = []
+        buy_x = []
+        buy_text = []
+        for ts, row in buys.iterrows():
+            dt = ts if isinstance(ts, pd.Timestamp) else pd.Timestamp(ts)
+            kline_row = df.loc[dt.strftime("%Y-%m-%d"):].head(1) if dt.strftime("%Y-%m-%d") in df.index.strftime("%Y-%m-%d") else None
+            close_v = float(row["last_price"])
+            buy_y.append(close_v)
+            buy_x.append(dt)
+            buy_text.append(f"买 {row.get('symbol','')}<br>{dt.strftime('%Y-%m-%d')}<br>价:{row['last_price']:.3f}<br>量:{int(row['last_quantity'])}股")
+        fig.add_trace(go.Scatter(
+            x=buy_x, y=buy_y, mode="markers",
+            name="买入", marker=dict(symbol="triangle-up", color="#1f77b4", size=12, line=dict(color="#1f77b4", width=1)),
+            legendgroup="buy", showlegend=True,
+            text=buy_text, hoverinfo="text",
+        ), row=1, col=1)
+
+    # 卖点 ▼
+    sells = stock_trades[stock_trades["side"] == "SELL"]
+    if not sells.empty:
+        sell_y = []
+        sell_x = []
+        sell_text = []
+        for ts, row in sells.iterrows():
+            dt = ts if isinstance(ts, pd.Timestamp) else pd.Timestamp(ts)
+            close_v = float(row["last_price"])
+            sell_y.append(close_v)
+            sell_x.append(dt)
+            sell_text.append(f"卖 {row.get('symbol','')}<br>{dt.strftime('%Y-%m-%d')}<br>价:{row['last_price']:.3f}<br>量:{int(row['last_quantity'])}股")
+        fig.add_trace(go.Scatter(
+            x=sell_x, y=sell_y, mode="markers",
+            name="卖出", marker=dict(symbol="triangle-down", color="#9467bd", size=12, line=dict(color="#9467bd",
+                                                                                                 width=1)),
+            legendgroup="sell", showlegend=True,
+            text=sell_text, hoverinfo="text",
+        ), row=1, col=1)
+
+    # 成交量
+    colors_vol = ["#d62728" if df.loc[t, "close"] >= df.loc[t, "open"] else "#2ca02c" for t in df.index]
+    fig.add_trace(go.Bar(
+        x=df.index, y=df["volume"], name="成交量",
+        marker=dict(color=colors_vol, line=dict(width=0)),
+        hovertemplate="%{x|%Y-%m-%d}<br>量: %{y:,.0f}<extra></extra>",
+    ), row=2, col=1)
+
+    fig.update_layout(
+        title=dict(text=f"{code} {stock_trades['symbol'].iloc[0] if 'symbol' in stock_trades.columns else ''}", font=dict(size=14)),
+        hovermode="closest",
+        autosize=True, height=700, margin=dict(t=50, b=40, l=40, r=40),
+        legend=dict(x=1.02, y=0.98),
+    )
+    fig.update_yaxes(title_text="价格", row=1, col=1)
+    fig.update_yaxes(title_text="成交量", row=2, col=1)
+    fig.update_xaxes(rangeslider=dict(visible=False), row=1, col=1)
+
+    return fig
+
+
 def build_stock_trade_freq(trades: pd.DataFrame) -> go.Figure | None:
     """个股交易频次横向堆叠柱状图：买/卖分别着色"""
     df = _prepare_trades(trades)
@@ -1446,6 +1593,17 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
         figs["hold_snapshot"] = build_holdings_snapshot_data(tr)
         holdings_figures_data[tag] = figs
 
+    # ---- K线图表：每个实验/每只股票一张图 ----
+    print("生成K线图表...")
+    kline_figures_data = OrderedDict()
+    for tag, data in results.items():
+        trades = data["trades"]
+        stock_codes = sorted(set(trades["order_book_id"].dropna()))
+        kline_figures_data[tag] = OrderedDict()
+        for code in stock_codes:
+            fig = build_stock_kline_chart(trades, code)
+            kline_figures_data[tag][code] = fig
+
     # ---- 构建延迟初始化数据结构 ----
     # {tab_id: [(div_id, fig_spec_json), ...]}
     tab_figures = OrderedDict()
@@ -1489,6 +1647,16 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
                 deep_figures_json[tag][chart_type] = _truncate_floats(_json.loads(fig.to_json()))
             else:
                 deep_figures_json[tag][chart_type] = None
+
+    # K线图表数据
+    kline_figures_json = OrderedDict()
+    for tag, figs in kline_figures_data.items():
+        kline_figures_json[tag] = OrderedDict()
+        for code, fig in figs.items():
+            if fig is not None:
+                kline_figures_json[tag][code] = _truncate_floats(_json.loads(fig.to_json()))
+            else:
+                kline_figures_json[tag][code] = None
 
     # 持仓与交易：按 tag 嵌套的图表数据
     holdings_figures_json = OrderedDict()
@@ -1614,6 +1782,16 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
           <tbody id="snap-tbody"></tbody>
         </table>
       </div>
+    </div>
+    <div class="plot-container">
+      <button class="fullscreen-btn" onclick="toggleFullscreen(this.parentElement)" title="全屏">&#x26F6;</button>
+      <h3>个股K线分析</h3>
+      <div class="snapshot-bar">
+        <label>选择股票：</label>
+        <select id="kline-stock-select" onchange="renderKlineChart()"></select>
+        <span style="font-size:12px;color:#888;">EMA线可在图例中点击切换</span>
+      </div>
+      <div id="kline_chart" class="plotly-graph-div" style="min-height:650px;"></div>
     </div>
     <div class="plot-container">
       <h3>调仓记录明细</h3>
@@ -1865,6 +2043,7 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
     var DEEP_FIGURES = {_json.dumps(deep_figures_json, ensure_ascii=False)};
     var HOLDINGS_FIGURES = {_json.dumps(holdings_figures_json, ensure_ascii=False)};
     var TRADE_LOG_DATA = {_json.dumps(trade_log_json, ensure_ascii=False)};
+    var KLINE_FIGURES = {_json.dumps(kline_figures_json, ensure_ascii=False)};
     var _initialized = {{}};
     var _plotlyConfig = {{responsive: true, displaylogo: false}};
     var _plotlyReady = false;
@@ -1942,7 +2121,15 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
         sel.innerHTML = dates.map(function(dt) {{ return '<option value="' + dt + '">' + dt + '</option>'; }}).join('');
         sel.value = dates.length ? dates[dates.length - 1] : '';
       }}
+      // 填充K线股票选择器
+      var klineData = KLINE_FIGURES[tag] || {{}};
+      var klineCodes = Object.keys(klineData).sort();
+      var klineSel = document.getElementById('kline-stock-select');
+      if (klineSel) {{
+        klineSel.innerHTML = klineCodes.map(function(c) {{ return '<option value="' + c + '">' + c + '</option>'; }}).join('');
+      }}
       renderSnapshot();
+      renderKlineChart();
     }}
 
     function onHoldingsChange() {{
@@ -2057,6 +2244,19 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
       }});
       document.getElementById('snap-tbody').innerHTML = rows.join('');
       document.getElementById('snap-info').textContent = '共持有 ' + codes.length + ' 只股票，估算市值 ' + totalValue.toLocaleString(undefined, {{maximumFractionDigits:0}});
+    }};
+
+    window.renderKlineChart = function() {{
+      var sel = document.getElementById('kline-stock-select');
+      if (!sel || !sel.value) return;
+      var code = sel.value;
+      var tagData = KLINE_FIGURES[_tlCurrentTag] || {{}};
+      var spec = tagData[code];
+      var el = document.getElementById('kline_chart');
+      Plotly.purge(el);
+      if (spec) {{
+        Plotly.newPlot('kline_chart', spec.data, spec.layout, _plotlyConfig);
+      }}
     }};
 
     window.snapNav = function(dir) {{

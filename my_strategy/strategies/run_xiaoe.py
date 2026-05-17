@@ -69,6 +69,7 @@ _M_DAYS_LIST      = [15, 20, 25, 30, 40, 50, 60]
 _DECAY_RATIO_LIST  = [1.0, 1.5, 2.0, 3.0]
 _TOP_N_LIST        = [1, 2, 3]
 _THRESHOLD_LIST    = [1.0, 1.05, 1.10]
+_EMA_DAYS          = 20
 
 
 def _tag(mode, **kw):
@@ -96,7 +97,7 @@ def _override(mode, **kw):
 # ── 模式1: 对比（2 组）── buy_and_hold vs equal_weight
 EXPERIMENTS = [
     # ("buy_and_hold",     _override("buy_and_hold")),
-    ("buy_and_hold_ema60", _override("buy_and_hold_ema60", ema_days=20)),
+    (f"buy_and_hold_ema{_EMA_DAYS}", _override("buy_and_hold_ema", ema_days=_EMA_DAYS)),
     # ("equal_weight",     _override("equal_weight")),
 ]
 
