@@ -69,7 +69,7 @@ _M_DAYS_LIST      = [15, 20, 25, 30, 40, 50, 60]
 _DECAY_RATIO_LIST  = [1.0, 1.5, 2.0, 3.0]
 _TOP_N_LIST        = [1, 2, 3]
 _THRESHOLD_LIST    = [1.0, 1.05, 1.10]
-_EMA_DAYS          = 20
+_EMA_DAYS          = 60
 
 
 def _tag(mode, **kw):

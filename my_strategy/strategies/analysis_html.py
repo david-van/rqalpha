@@ -465,7 +465,7 @@ def build_curves_figure(results: dict) -> go.Figure:
         title=dict(text="曲线对比分析", font=dict(size=18)),
         hovermode="closest",
         autosize=True,
-        height=950,
+        height=1100,
         legend=dict(font=dict(size=10), orientation="h", yanchor="top", y=-0.10, xanchor="center", x=0.5),
     )
     fig.update_yaxes(title_text="单位净值", row=1, col=1)
@@ -1238,11 +1238,15 @@ def build_stock_kline_chart(trades: pd.DataFrame, code: str) -> go.Figure | None
     if df is None or df.empty:
         return None
 
-    # EMA
-    for span in [20, 50, 60, 120]:
+    # EMA 预设：全部计算，默认只显示 20/50/60
+    EMA_PRESETS = [5, 10, 20, 30, 50, 60, 120, 250]
+    EMA_DEFAULT_ON = {20, 50, 60}
+    EMA_COLORS = {
+        5: "#17becf", 10: "#bcbd22", 20: "#ff7f0e", 30: "#e377c2",
+        50: "#2ca02c", 60: "#1f77b4", 120: "#9467bd", 250: "#d62728",
+    }
+    for span in EMA_PRESETS:
         df[f"ema_{span}"] = df["close"].ewm(span=span, min_periods=span).mean()
-
-    ema_colors = {"ema_20": "#ff7f0e", "ema_50": "#2ca02c", "ema_60": "#1f77b4", "ema_120": "#9467bd"}
 
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True,
@@ -1259,11 +1263,12 @@ def build_stock_kline_chart(trades: pd.DataFrame, code: str) -> go.Figure | None
     ), row=1, col=1)
 
     # EMA 线
-    for col, color in ema_colors.items():
-        label = col.replace("ema_", "EMA")
-        visible = col != "ema_120"
+    for span in EMA_PRESETS:
+        label = f"EMA{span}"
+        visible = span in EMA_DEFAULT_ON
+        color = EMA_COLORS.get(span, "#888888")
         fig.add_trace(go.Scatter(
-            x=df.index, y=df[col], mode="lines",
+            x=df.index, y=df[f"ema_{span}"], mode="lines",
             name=label, line=dict(color=color, width=1.2),
             visible=visible,
             legendgroup=label,
@@ -1329,7 +1334,11 @@ def build_stock_kline_chart(trades: pd.DataFrame, code: str) -> go.Figure | None
     fig.update_yaxes(title_text="成交量", row=2, col=1)
     fig.update_xaxes(rangeslider=dict(visible=False), row=1, col=1)
 
-    return fig
+    close_data = {
+        "close": [round(float(v), 3) for v in df["close"].tolist()],
+        "dates": df.index.strftime("%Y-%m-%d").tolist(),
+    }
+    return fig, close_data
 
 
 def build_stock_trade_freq(trades: pd.DataFrame) -> go.Figure | None:
@@ -1605,8 +1614,8 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
         stock_codes = sorted(set(trades["order_book_id"].dropna()))
         kline_figures_data[tag] = OrderedDict()
         for code in stock_codes:
-            fig = build_stock_kline_chart(trades, code)
-            kline_figures_data[tag][code] = fig
+            result = build_stock_kline_chart(trades, code)
+            kline_figures_data[tag][code] = result
 
     # ---- 构建延迟初始化数据结构 ----
     # {tab_id: [(div_id, fig_spec_json), ...]}
@@ -1654,13 +1663,18 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
 
     # K线图表数据
     kline_figures_json = OrderedDict()
+    kline_close_json = OrderedDict()
     for tag, figs in kline_figures_data.items():
         kline_figures_json[tag] = OrderedDict()
-        for code, fig in figs.items():
-            if fig is not None:
+        kline_close_json[tag] = OrderedDict()
+        for code, result in figs.items():
+            if result is not None:
+                fig, close_data = result
                 kline_figures_json[tag][code] = _truncate_floats(_json.loads(fig.to_json()))
+                kline_close_json[tag][code] = close_data
             else:
                 kline_figures_json[tag][code] = None
+                kline_close_json[tag][code] = None
 
     # 持仓与交易：按 tag 嵌套的图表数据
     holdings_figures_json = OrderedDict()
@@ -1793,7 +1807,12 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
       <div class="snapshot-bar">
         <label>选择股票：</label>
         <select id="kline-stock-select" onchange="renderKlineChart()"></select>
-        <span style="font-size:12px;color:#888;">EMA线可在图例中点击切换</span>
+      </div>
+      <div class="snapshot-bar" style="flex-wrap:wrap;">
+        <label style="font-size:13px;">EMA：</label>
+        <span id="kline-ema-presets"></span>
+        <input type="number" id="kline-ema-custom" placeholder="自定义周期" min="2" max="500" style="width:100px;padding:3px 8px;font-size:13px;border:1px solid #ddd;border-radius:4px;">
+        <button onclick="addCustomEma()" style="padding:3px 12px;font-size:13px;border:1px solid #1a73e8;border-radius:4px;background:#1a73e8;color:white;cursor:pointer;">添加</button>
       </div>
       <div id="kline_chart" class="plotly-graph-div" style="min-height:650px;"></div>
     </div>
@@ -1987,6 +2006,12 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
     #snap-table tbody tr:hover {{
       background: #f0f4ff;
     }}
+    .ema-check {{
+      display: inline-flex; align-items: center; gap: 2px;
+      font-size: 12px; cursor: pointer; margin-right: 6px;
+      background: #f0f4ff; padding: 2px 6px; border-radius: 3px;
+    }}
+    .ema-check input {{ margin: 0; cursor: pointer; }}
   </style>
 </head>
 <body>
@@ -2052,6 +2077,7 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
     var HOLDINGS_FIGURES = {_json.dumps(holdings_figures_json, ensure_ascii=False)};
     var TRADE_LOG_DATA = {_json.dumps(trade_log_json, ensure_ascii=False)};
     var KLINE_FIGURES = {_json.dumps(kline_figures_json, ensure_ascii=False)};
+    var KLINE_CLOSE = {_json.dumps(kline_close_json, ensure_ascii=False)};
     var _initialized = {{}};
     var _plotlyConfig = {{responsive: true, displaylogo: false}};
     var _plotlyReady = false;
@@ -2274,7 +2300,123 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
       Plotly.purge(el);
       if (spec) {{
         Plotly.newPlot('kline_chart', spec.data, spec.layout, _plotlyConfig);
+        _klineCode = code;
+        _customEmas = [];
+        buildEmaPresets();
       }}
+    }};
+
+    var _klineCode = '';
+    var _customEmas = [];
+
+    function _emaPresets() {{
+      // 从 Plotly 数据中提取所有 EMA trace 的 name
+      var el = document.getElementById('kline_chart');
+      if (!el || !el._fullData) return [];
+      return el._fullData.filter(function(t) {{
+        return t.name && t.name.startsWith('EMA');
+      }}).map(function(t) {{ return parseInt(t.name.replace('EMA','')); }});
+    }}
+
+    function buildEmaPresets() {{
+      var el = document.getElementById('kline_chart');
+      var visMap = {{}};
+      if (el && el._fullData) {{
+        el._fullData.forEach(function(t) {{
+          if (t.name && t.name.startsWith('EMA')) {{
+            var n = parseInt(t.name.replace('EMA',''));
+            visMap[n] = t.visible === true;
+          }}
+        }});
+      }}
+      var presets = _emaPresets();
+      var html = presets.map(function(n) {{
+        var chk = visMap[n] ? ' checked' : '';
+        return '<label class="ema-check"><input type="checkbox" value="' + n + '" onchange="toggleEma(' + n + ')"' + chk + '>' + n + '</label>';
+      }}).join('');
+      document.getElementById('kline-ema-presets').innerHTML = html;
+      // 加上已添加的自定义 EMA
+      _customEmas.forEach(function(n) {{
+        addCustomEmaCheck(n);
+      }});
+    }}
+
+    window.toggleEma = function(span) {{
+      var el = document.getElementById('kline_chart');
+      if (!el || !el._fullData) return;
+      var match = 'EMA' + span;
+      var vis = el._fullData.map(function(t) {{
+        if (t.name === match) return !(t.visible === true);
+        return t.visible === true;
+      }});
+      Plotly.restyle(el, 'visible', vis);
+    }};
+
+    window.addCustomEma = function() {{
+      var input = document.getElementById('kline-ema-custom');
+      var n = parseInt(input.value);
+      if (!n || n < 2 || n > 500) {{ alert('请输入 2-500 之间的数字'); return; }}
+      // 检查是否已存在
+      var all = _emaPresets().concat(_customEmas);
+      if (all.indexOf(n) !== -1) {{ alert('EMA' + n + ' 已存在'); return; }}
+
+      var closeData = KLINE_CLOSE[_tlCurrentTag] || {{}};
+      var cd = closeData[_klineCode];
+      if (!cd || !cd.close) return;
+
+      // 计算自定义 EMA
+      var alpha = 2 / (n + 1);
+      var ema = [];
+      var prev = cd.close[0];
+      for (var i = 0; i < cd.close.length; i++) {{
+        if (i === 0) {{ ema.push(cd.close[0]); }}
+        else {{
+          var val = alpha * cd.close[i] + (1 - alpha) * prev;
+          ema.push(val);
+          prev = val;
+        }}
+      }}
+
+      // 取前 8 种颜色之外的循环颜色
+      var colorCycle = ['#1f77b4','#ff7f0e','#2ca02c','#d62728','#9467bd','#8c564b','#e377c2','#7f7f7f','#bcbd22','#17becf'];
+      var color = colorCycle[_customEmas.length % colorCycle.length];
+
+      Plotly.addTraces('kline_chart', {{
+        x: cd.dates, y: ema, mode: 'lines',
+        name: 'EMA' + n, line: {{color: color, width: 1.2}},
+        legendgroup: 'EMA' + n,
+        hovertemplate: 'EMA' + n + ': %{{y:.3f}}<extra></extra>',
+      }});
+
+      _customEmas.push(n);
+      addCustomEmaCheck(n);
+      input.value = '';
+    }};
+
+    function addCustomEmaCheck(n) {{
+      var container = document.getElementById('kline-ema-presets');
+      var label = document.createElement('label');
+      label.className = 'ema-check';
+      label.id = 'ema-check-' + n;
+      label.innerHTML = '<input type="checkbox" value="' + n + '" onchange="toggleEma(' + n + ')" checked>' + n +
+        ' <span onclick="removeCustomEma(' + n + ')" style="cursor:pointer;color:#d62728;font-size:11px;">×</span>';
+      container.appendChild(label);
+    }}
+
+    window.removeCustomEma = function(n) {{
+      var el = document.getElementById('kline_chart');
+      if (!el || !el._fullData) return;
+      var match = 'EMA' + n;
+      var idx = -1;
+      for (var i = 0; i < el._fullData.length; i++) {{
+        if (el._fullData[i].name === match) {{ idx = i; break; }}
+      }}
+      if (idx >= 0) {{
+        Plotly.deleteTraces('kline_chart', idx);
+      }}
+      _customEmas = _customEmas.filter(function(v) {{ return v !== n; }});
+      var chk = document.getElementById('ema-check-' + n);
+      if (chk) chk.remove();
     }};
 
     window.snapNav = function(dir) {{
