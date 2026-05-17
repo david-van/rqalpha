@@ -1492,6 +1492,10 @@ TRADE_LOG_SHELL = """<div class="trade-log-toolbar">
     <option value="BUY">买入</option>
     <option value="SELL">卖出</option>
   </select>
+  <label style="font-size:13px;margin-left:4px;">从</label>
+  <input type="date" id="tl-date-from" onchange="tlRender()" class="tl-date-input">
+  <label style="font-size:13px;">至</label>
+  <input type="date" id="tl-date-to" onchange="tlRender()" class="tl-date-input">
   <span class="tl-info" id="tl-info"></span>
 </div>
 <div style="overflow-x:auto;">
@@ -1919,6 +1923,10 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
     .tl-info {{
       font-size: 13px; color: #888; margin-left: auto;
     }}
+    .tl-date-input {{
+      padding: 6px 10px; font-size: 13px; font-family: inherit;
+      border: 1px solid #ddd; border-radius: 4px; background: white;
+    }}
     .trade-log-table {{
       font-size: 12px;
     }}
@@ -2111,6 +2119,12 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
       }});
       // 更新调仓明细表
       _tlCurrentTag = tag;
+      // 设置日期筛选默认范围
+      var recs = _tlData();
+      if (recs.length > 0) {{
+        document.getElementById('tl-date-from').value = recs[0].date;
+        document.getElementById('tl-date-to').value = recs[recs.length - 1].date;
+      }}
       tlRefreshData();
       // 填充持仓快照日期选择器
       var d = TRADE_LOG_DATA[tag];
@@ -2165,10 +2179,14 @@ def build_dashboard_html(results: dict, output_path: Path) -> None:
     window.tlRender = function() {{
       var q = (document.getElementById('tl-search').value || '').toLowerCase();
       var sideFilter = document.getElementById('tl-side-filter').value;
+      var dateFrom = document.getElementById('tl-date-from').value;
+      var dateTo = document.getElementById('tl-date-to').value;
       var data = _tlData();
       var filtered = data.filter(function(r) {{
         if (q && r.code.toLowerCase().indexOf(q) === -1 && r.name.toLowerCase().indexOf(q) === -1) return false;
         if (sideFilter && r.side !== sideFilter) return false;
+        if (dateFrom && r.date < dateFrom) return false;
+        if (dateTo && r.date > dateTo) return false;
         return true;
       }});
       var sk = _tlSortKey;
