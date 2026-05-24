@@ -9,6 +9,8 @@ import html
 from datetime import datetime
 from pathlib import Path
 
+from my_strategy.common_file import project_root
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -16,7 +18,7 @@ from plotly.offline import get_plotlyjs
 from plotly.subplots import make_subplots
 
 
-DEFAULT_RESULT_DIR = Path(__file__).with_name("batch_results") / "gap_strategy_513030"
+DEFAULT_RESULT_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results' / 'gap_strategy_513030'
 
 COL_THRESHOLD = "阈值"
 COL_YEAR = "年份"

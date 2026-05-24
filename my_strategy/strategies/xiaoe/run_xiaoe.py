@@ -19,8 +19,8 @@ from rqalpha import run_file
 
 
 # ==================== 基础配置 ====================
-STRATEGY_FILE = os.path.join(project_root, 'my_strategy/strategies/xiaoe_strategy.py')
-RESULT_DIR = Path(__file__).with_name('batch_results').joinpath("xiaoe_pool")
+STRATEGY_FILE = os.path.join(project_root, 'my_strategy/strategies/xiaoe/xiaoe_strategy.py')
+RESULT_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results' / 'xiaoe_pool'
 RESULT_DIR.mkdir(exist_ok=True, parents=True)
 
 POOL_DIR = str(Path(project_root) / "my_strategy/strategies/xiaoe_articles")

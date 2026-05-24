@@ -90,4 +90,4 @@ if __name__ == "__main__":
         compare(sys.argv[1], sys.argv[2])
     else:
         # 直接修改这里的路径
-        compare("batch_results/baseline.pkl", "batch_results/replace_180.pkl")
+        compare("../batch_results/baseline.pkl", "../batch_results/replace_180.pkl")

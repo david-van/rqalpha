@@ -10,8 +10,10 @@ import pandas as pd
 import pickle
 from pathlib import Path
 
+from my_strategy.common_file import project_root
+
 # ---- 配置：只需改这一处 ----
-pkl_path = Path("batch_results/no_min_score.pkl")
+pkl_path = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results' / 'no_min_score.pkl'
 
 with open(pkl_path, "rb") as f:
     result = pickle.load(f)

@@ -15,8 +15,8 @@ from rqalpha import run_file
 
 
 # ==================== 基础配置 ====================
-STRATEGY_FILE = os.path.join(project_root, 'my_strategy/strategies/momentum.py')
-RESULT_DIR = Path(__file__).with_name('batch_results')
+STRATEGY_FILE = os.path.join(project_root, 'my_strategy/strategies/momentum_rotation/momentum.py')
+RESULT_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results'
 RESULT_DIR = RESULT_DIR.joinpath("lihai_pool")
 RESULT_DIR.mkdir(exist_ok=True)
 

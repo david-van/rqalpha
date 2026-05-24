@@ -12,6 +12,8 @@ import warnings
 from datetime import datetime
 from pathlib import Path
 
+from my_strategy.common_file import project_root
+
 import h5py
 import numpy as np
 import pandas as pd
@@ -30,7 +32,7 @@ TRADING_DAYS_PER_YEAR = 250
 # ============================================================
 # 配置
 # ============================================================
-RESULT_DIR = Path(__file__).with_name("batch_results")
+RESULT_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results'
 RESULT_DIR = RESULT_DIR.joinpath("xiaoe_pool")
 
 # Bundle 日线数据路径

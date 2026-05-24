@@ -17,6 +17,8 @@ import pickle
 import warnings
 from pathlib import Path
 
+from my_strategy.common_file import project_root
+
 import numpy as np
 import pandas as pd
 import matplotlib
@@ -30,7 +32,7 @@ matplotlib.rcParams["axes.unicode_minus"] = False
 # ============================================================
 # 配置
 # ============================================================
-RESULT_DIR = Path(__file__).with_name("batch_results")
+RESULT_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results'
 # todo 配置自己需要分析的详细目录
 RESULT_DIR = RESULT_DIR.joinpath("decay_ratio")
 TRADING_DAYS_PER_YEAR = 250

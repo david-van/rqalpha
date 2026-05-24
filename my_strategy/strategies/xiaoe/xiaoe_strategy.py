@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from my_strategy.common_file import project_root
 from rqalpha.api import (
     history_bars, order_target_value, logger, scheduler,
 )
@@ -111,7 +112,7 @@ DEFAULT_PARAMS = {
 # 策略入口
 # ============================================================
 def init(context):
-    csv_dir = str(Path(__file__).parent / "xiaoe_articles")
+    csv_dir = str(Path(project_root) / 'my_strategy' / 'strategies' / 'xiaoe_articles')
     params = DEFAULT_PARAMS.copy()
 
     injected = getattr(context, 'strategy_params', None)

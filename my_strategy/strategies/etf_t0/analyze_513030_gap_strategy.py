@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--out-dir",
-        default="batch_results/gap_strategy_513030",
+        default="../batch_results/gap_strategy_513030",
         help="Output directory",
     )
     return parser.parse_args()

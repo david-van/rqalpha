@@ -8,7 +8,7 @@ from rqalpha import run_file
 
 
 def main():
-    strategy_file = os.path.join(project_root, 'my_strategy/strategies/etf_pool.py')
+    strategy_file = os.path.join(project_root, 'my_strategy/strategies/etf_pool/etf_pool.py')
     config = {
         "base": {
             "strategy_file": str(strategy_file),
@@ -46,7 +46,7 @@ def main():
         },
         "extra": {
             "log_level": "info",
-            "log_file": str(Path(__file__).with_name("backtest.log")),
+            "log_file": str(Path(project_root) / 'my_strategy' / 'strategies' / 'backtest.log'),
         },
     }
 
