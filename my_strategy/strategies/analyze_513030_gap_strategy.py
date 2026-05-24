@@ -14,7 +14,8 @@ import pandas as pd
 
 DEFAULT_BUNDLE = r"D:\datas\bundle"
 DEFAULT_SECURITY = "513030.XSHG"
-DEFAULT_START_DATE = "2023-01-03"
+DEFAULT_START_DATE = "2017-01-03"
+DEFAULT_END_DATE = "2026-03-01"
 
 
 def parse_args() -> argparse.Namespace:
@@ -27,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bundle", default=DEFAULT_BUNDLE, help="RQAlpha bundle path")
     parser.add_argument("--security", default=DEFAULT_SECURITY, help="Security id")
     parser.add_argument("--start-date", default=DEFAULT_START_DATE)
-    parser.add_argument("--end-date", default=None)
+    parser.add_argument("--end-date", default=DEFAULT_END_DATE)
     parser.add_argument("--step", type=float, default=0.001, help="Gap bucket step")
     parser.add_argument("--min-gap", type=float, default=-0.02)
     parser.add_argument("--max-gap", type=float, default=0.04)
@@ -39,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--out-dir",
-        default="outputs/gap_strategy_513030",
+        default="batch_results/gap_strategy_513030",
         help="Output directory",
     )
     return parser.parse_args()
