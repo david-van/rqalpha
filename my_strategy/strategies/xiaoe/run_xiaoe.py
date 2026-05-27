@@ -20,6 +20,7 @@ from rqalpha import run_file
 
 # ==================== 基础配置 ====================
 STRATEGY_FILE = os.path.join(project_root, 'my_strategy/strategies/xiaoe/xiaoe_strategy.py')
+STRATEGY_FILE_TURTLE = os.path.join(project_root, 'my_strategy/strategies/xiaoe/xiaoe_turtle.py')
 RESULT_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results' / 'xiaoe_pool'
 RESULT_DIR.mkdir(exist_ok=True, parents=True)
 
@@ -127,15 +128,28 @@ EXPERIMENTS = [
 # ]
 
 
+# ── 模式5: 海龟仓位管理 ──
+_TURTLE_BASE = {"pool_csv_dir": POOL_DIR}
+EXPERIMENTS_TURTLE = [
+    ("turtle",          dict(risk_pct=0.03, max_units=3, stop_atr=5.0, reentry_days=20, **_TURTLE_BASE)),
+    # ("turtle_r2",       dict(risk_pct=0.02, max_units=3, stop_atr=5.0, reentry_days=20, **_TURTLE_BASE)),
+    # ("turtle_r4",       dict(risk_pct=0.04, max_units=3, stop_atr=5.0, reentry_days=20, **_TURTLE_BASE)),
+    # ("turtle_u4",       dict(risk_pct=0.03, max_units=4, stop_atr=5.0, reentry_days=20, **_TURTLE_BASE)),
+    # ("turtle_tight",    dict(risk_pct=0.03, max_units=3, stop_atr=3.0, reentry_days=20, **_TURTLE_BASE)),
+]
+
+
 # ==================== 单次回测 ====================
-def run_one(tag: str, param_override: dict):
+def run_one(tag: str, param_override: dict, strategy_file: str = None):
     config = make_base_config(tag)
+    if strategy_file:
+        config["base"]["strategy_file"] = strategy_file
     config["extra"]["context_vars"] = {
         "strategy_params": param_override,
     }
     print(f'\n========== 运行: {tag} ==========')
     print(f'参数覆盖: {param_override}')
-    result = run_file(STRATEGY_FILE, config=config)
+    result = run_file(strategy_file or STRATEGY_FILE, config=config)
     return result
 
 
@@ -159,9 +173,20 @@ def main():
     metrics_list = []
     portfolios = {}
 
-    for tag, override in EXPERIMENTS:
+    # for tag, override in EXPERIMENTS:
+    #     try:
+    #         result = run_one(tag, override)
+    #         metrics_list.append(extract_metrics(tag, result))
+    #         pf = result.get('sys_analyser', {}).get('portfolio')
+    #         if pf is not None:
+    #             portfolios[tag] = pf['unit_net_value']
+    #     except Exception as e:
+    #         print(f'[{tag}] 回测失败: {e}')
+    #         metrics_list.append({'tag': tag, 'error': str(e)})
+
+    for tag, override in EXPERIMENTS_TURTLE:
         try:
-            result = run_one(tag, override)
+            result = run_one(tag, override, strategy_file=STRATEGY_FILE_TURTLE)
             metrics_list.append(extract_metrics(tag, result))
             pf = result.get('sys_analyser', {}).get('portfolio')
             if pf is not None:
