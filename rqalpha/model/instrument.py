@@ -447,7 +447,7 @@ class Instrument(metaclass=PropertyReprMeta):
         # type: () -> float
         if self.type in (INSTRUMENT_TYPE.CS, INSTRUMENT_TYPE.INDX):
             return 0.01
-        elif self.type in ("ETF", "LOF", "REITs"):
+        elif self.type in ("ETF", "LOF", "REITs", INSTRUMENT_TYPE.CONVERTIBLE):
             return 0.001
         elif self.type == INSTRUMENT_TYPE.FUTURE:
             return self._futures_tick_size_getter(self)
