@@ -39,6 +39,7 @@ except ImportError:
     print("请先安装 pymysql: pip install pymysql")
     sys.exit(1)
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from my_strategy.common_file import project_root
 
 DEFAULT_OUT_DIR = (
@@ -212,15 +213,25 @@ def build_bucket_table(df: pd.DataFrame, args) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def build_top_summary(threshold_df: pd.DataFrame) -> pd.DataFrame:
-    """找出每个 ETF 累计收益最高的阈值."""
+def build_top_summary(threshold_df: pd.DataFrame, df: pd.DataFrame) -> pd.DataFrame:
+    """找出每个 ETF 累计收益最高的阈值，附加数据年数和年化收益率."""
     idx = threshold_df.groupby("order_book_id")["total_return"].idxmax()
     top = threshold_df.loc[idx].copy()
+
+    # 计算每只 ETF 的数据年份跨度
+    span = df.groupby("order_book_id")["trade_date"].agg(["min", "max"])
+    span["years"] = (span["max"] - span["min"]).dt.days / 365.25
+    top = top.merge(span[["years"]], on="order_book_id", how="left")
+    top["annualized_return"] = (
+        (1 + top["total_return"]) ** (1 / top["years"]) - 1
+    )
+
     top = top.sort_values("total_return", ascending=False).reset_index(drop=True)
     return top[
         [
-            "order_book_id", "threshold", "trade_count", "win_rate",
-            "avg_return", "total_return", "max_drawdown", "profit_loss_ratio",
+            "order_book_id", "threshold", "years", "trade_count", "win_rate",
+            "avg_return", "total_return", "annualized_return", "max_drawdown",
+            "profit_loss_ratio",
         ]
     ]
 
@@ -253,12 +264,15 @@ def print_summary(top_df: pd.DataFrame, threshold_df: pd.DataFrame) -> None:
     print(f"\n{'='*80}")
     print("各 ETF 最优阈值（按累计收益率排序）")
     print(f"{'='*80}")
-    cols = ["order_book_id", "threshold", "trade_count", "win_rate", "total_return", "max_drawdown"]
+    cols = ["order_book_id", "threshold", "years", "trade_count", "win_rate",
+            "total_return", "annualized_return", "max_drawdown"]
     display = top_df[cols].copy()
     display["win_rate"] = display["win_rate"].map(lambda x: f"{x:.1%}")
     display["total_return"] = display["total_return"].map(lambda x: f"{x:.2%}")
+    display["annualized_return"] = display["annualized_return"].map(lambda x: f"{x:.2%}")
     display["max_drawdown"] = display["max_drawdown"].map(lambda x: f"{x:.2%}")
     display["threshold"] = display["threshold"].map(lambda x: f"{x:.4f}")
+    display["years"] = display["years"].map(lambda x: f"{x:.2f}年" if pd.notna(x) else "-")
     print(display.to_string(index=False))
 
     print(f"\n{'='*80}")
@@ -274,7 +288,8 @@ def print_summary(top_df: pd.DataFrame, threshold_df: pd.DataFrame) -> None:
         print(f"  (实际使用阈值: {th_near:.4f})")
 
     at_003 = at_003.sort_values("total_return", ascending=False)
-    display2 = at_003[cols].copy()
+    cols2 = ["order_book_id", "threshold", "trade_count", "win_rate", "total_return", "max_drawdown"]
+    display2 = at_003[cols2].copy()
     display2["win_rate"] = display2["win_rate"].map(lambda x: f"{x:.1%}")
     display2["total_return"] = display2["total_return"].map(lambda x: f"{x:.2%}")
     display2["max_drawdown"] = display2["max_drawdown"].map(lambda x: f"{x:.2%}")
@@ -311,7 +326,7 @@ def main() -> None:
     bucket_df = build_bucket_table(df, args)
 
     print("汇总最优阈值 ...")
-    top_df = build_top_summary(threshold_df)
+    top_df = build_top_summary(threshold_df, df)
 
     out_dir = Path(args.out_dir)
     write_outputs(threshold_df, bucket_df, top_df, df, out_dir)
