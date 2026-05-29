@@ -34,6 +34,10 @@ VALID_HISTORY_FIELDS = [
     "basis_spread",
     "settlement",
     "prev_settlement",
+    "cb_over_rate",
+    "cb_value",
+    "bond_value",
+    "bond_over_rate",
 ]
 
 VALID_TENORS = [

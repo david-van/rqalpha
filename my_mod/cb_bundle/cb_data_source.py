@@ -8,14 +8,38 @@ import os
 import pickle
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from rqalpha.const import INSTRUMENT_TYPE, MARKET
 from rqalpha.data.base_data_source.data_source import BaseDataSource
-from rqalpha.data.base_data_source.storages import DayBarStore, load_instruments_from_pkl
+from rqalpha.data.base_data_source.storages import DayBarStore
 from rqalpha.model.instrument import Instrument
 from rqalpha.environment import Environment
 
 if TYPE_CHECKING:
     from rqalpha.interface import AbstractDataSource
+
+
+# 可转债专属 DayBarStore：扩展 DEFAULT_DTYPE，HDF5 里没有的债券返回空时字段也完整
+class CBDayBarStore(DayBarStore):
+    DEFAULT_DTYPE = np.dtype([
+        ('datetime',       np.uint64),
+        ('open',           np.float64),
+        ('close',          np.float64),
+        ('high',           np.float64),
+        ('low',            np.float64),
+        ('prev_close',     np.float64),
+        ('change',         np.float64),
+        ('pct_chg',        np.float64),
+        ('limit_up',       np.float64),
+        ('limit_down',     np.float64),
+        ('volume',         np.float64),
+        ('total_turnover', np.float64),
+        ('cb_over_rate',   np.float64),
+        ('cb_value',       np.float64),
+        ('bond_value',     np.float64),
+        ('bond_over_rate', np.float64),
+    ])
 
 
 class CBDataSource(BaseDataSource):
@@ -39,7 +63,6 @@ class CBDataSource(BaseDataSource):
         if os.path.exists(cb_pkl):
             with open(cb_pkl, 'rb') as f:
                 cb_instruments = pickle.load(f)
-            # 复用 super().__init__ 中已构建的 _future_info_store 的 get_tick_size
             insts = []
             for d in cb_instruments:
                 if d.get('type') == 'Convertible':
@@ -48,10 +71,10 @@ class CBDataSource(BaseDataSource):
                 self.register_instruments(insts)
                 print(f'[CBDataSource] 注册 {len(insts)} 只可转债合约')
 
-        # 注册可转债日线存储
+        # 注册可转债日线存储（使用 CBDayBarStore 保证 dtype 一致）
         cb_h5 = _p('convertibles.h5')
         if os.path.exists(cb_h5):
-            cb_store = DayBarStore(cb_h5)
+            cb_store = CBDayBarStore(cb_h5)
             self.register_day_bar_store(INSTRUMENT_TYPE.CONVERTIBLE, cb_store, market=MARKET.CN)
             print(f'[CBDataSource] 注册可转债日线存储: {cb_h5}')
 

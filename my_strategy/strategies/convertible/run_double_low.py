@@ -67,7 +67,6 @@ def make_base_config(tag: str):
 # ---- 参数范围 ----
 _TOP_N_LIST       = [10, 15, 20, 30]
 _MAX_PRICE_LIST   = [120, 130, 140]
-_MIN_REMAIN_LIST  = [0.5, 1.0]
 
 
 def _tag(**kw):
@@ -75,7 +74,6 @@ def _tag(**kw):
     for k, v in kw.items():
         if k == 'top_n' and v == 20: continue
         if k == 'max_price' and v == 130: continue
-        if k == 'min_remain' and v == 1.0: continue
         parts.append(f"{k}{v}")
     return "_".join(parts) if parts else "baseline"
 
@@ -86,18 +84,18 @@ def _override(**kw):
 
 # ── 模式1: 基准单次回测 ──
 EXPERIMENTS = [
-    ("baseline", _override(top_n=20, max_price=130, min_remain=1.0)),
+    ("baseline", _override(top_n=20, max_price=130)),
 ]
 
 # ── 模式2: top_n 参数扫描 ──
 # EXPERIMENTS = [
-#     (_tag(top_n=n), _override(top_n=n, max_price=130, min_remain=1.0))
+#     (_tag(top_n=n), _override(top_n=n, max_price=130, ))
 #     for n in _TOP_N_LIST
 # ]
 
 # ── 模式3: max_price 参数扫描 ──
 # EXPERIMENTS = [
-#     (_tag(max_price=p), _override(top_n=20, max_price=p, min_remain=1.0))
+#     (_tag(max_price=p), _override(top_n=20, max_price=p, ))
 #     for p in _MAX_PRICE_LIST
 # ]
 
