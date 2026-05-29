@@ -283,6 +283,7 @@ def run(codes=None, all=False, force=False, start_date='', end_date='',
     os.makedirs(bundle_path, exist_ok=True)
     h5_mode = 'w' if force else 'a'
     total_added, total_skipped, total_failed = 0, 0, 0
+    has_data = set(existing_h5.keys())  # 已有数据的 code + 本次成功下载的
 
     with h5py.File(h5_path, h5_mode) as h5:
         for batch_start in range(0, len(ts_codes), batch_size):
@@ -321,6 +322,7 @@ def run(codes=None, all=False, force=False, start_date='', end_date='',
 
                 arr = _df_to_array(df)
                 batch_data[ts_code] = arr
+                has_data.add(ts_code)
                 print(f'  [{idx}/{len(ts_codes)}] {ts_code} → {len(arr)} 条')
 
             # 立即写入本批次
@@ -336,11 +338,12 @@ def run(codes=None, all=False, force=False, start_date='', end_date='',
             else:
                 print(f'[批次 {b}/{n_batches}] 无数据')
 
-    # 4. 保存 instruments
-    merged_instruments = list(existing_insts.values())
+    # 4. 保存 instruments（仅保留有日线数据的）
+    merged_instruments = [v for k, v in existing_insts.items() if k in has_data]
+    skipped_insts = len(existing_insts) - len(merged_instruments)
     with open(pkl_path, 'wb') as f:
         pickle.dump(merged_instruments, f, protocol=2)
-    print(f'[save] instruments: {len(merged_instruments)} 只 → {pkl_path}')
+    print(f'[save] instruments: {len(merged_instruments)} 只（跳过 {skipped_insts} 只无日线数据） → {pkl_path}')
 
     print(f'\n=== 完成 ===')
     print(f'写入: {total_added} 只, 跳过(无新数据): {total_skipped} 只, 失败: {total_failed} 只')
