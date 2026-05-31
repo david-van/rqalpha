@@ -78,9 +78,6 @@ def make_base_config(tag: str):
 _M_DAYS_LIST     = [20, 25, 30, 35, 40]
 _THRESHOLD_LIST  = [1.0, 1.05, 1.10, 1.15, 1.20]
 _DECAY_RATIO_LIST = [1.0, 1.5, 2.0, 2.5, 3.0]
-# 动态池模式专用：从极短到极长，看 m_days 对收益曲线的影响
-# _DYN_M_DAYS_LIST = [5, 10, 15, 20, 25, 30, 40, 50, 60,70,80, 90, 120, 200]
-_DYN_M_DAYS_LIST = [55, 58, 60, 62, 65, 68, 70, 75, 80, 85, 90, 95, 100]
 
 
 def _make_tag(d, t, r=1.0):
@@ -109,11 +106,11 @@ def _make_override(d, t, r=1.0):
     return override
 
 # 模式C：二维网格（m_days × switch_threshold），共 len(_M_DAYS_LIST) × len(_THRESHOLD_LIST) 组
-# EXPERIMENTS = [
-#     (_make_tag(d, t), _make_override(d, t))
-#     for d in _M_DAYS_LIST
-#     for t in _THRESHOLD_LIST
-# ]
+EXPERIMENTS = [
+    (_make_tag(d, t), _make_override(d, t))
+    for d in _M_DAYS_LIST
+    for t in _THRESHOLD_LIST
+]
 
 # 模式D：三维网格（m_days × switch_threshold × decay_ratio），样本多，按需开启
 # EXPERIMENTS = [
@@ -128,24 +125,6 @@ def _make_override(d, t, r=1.0):
 #     (_make_tag(25, 1.0, r), _make_override(25, 1.0, r))
 #     for r in _DECAY_RATIO_LIST
 # ]
-
-# 模式F：动态股票池（从 xiaoe_articles CSV 按日期加载持仓池）
-# EXPERIMENTS = [
-#     ("dynamic_pool", {
-#         "pool_csv_dir": str(Path(project_root) / "xiaoe_articles"),
-#         "scorer_momentum_r2": {"m_days": 50},
-#     }),
-# ]
-
-# 模式G：动态股票池 × m_days 扫描（判断动量天数是否是问题）
-# tag 命名：dyn_m{天数}
-EXPERIMENTS = [
-    (f"dyn_m{d:03d}", {
-        "pool_csv_dir": str(Path(project_root) / "my_strategy/strategies/xiaoe_articles"),
-        "scorer_momentum_r2": {"m_days": d},
-    })
-    for d in _DYN_M_DAYS_LIST
-]
 
 # 模式A：只扫 m_days（注释掉模式C，取消下方注释）
 # _M_DAYS_LIST = [5, 8, 10, 15, 18, 20, 22, 25, 28, 30, 35, 40, 50, 60]
