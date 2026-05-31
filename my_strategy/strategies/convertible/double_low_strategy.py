@@ -8,9 +8,11 @@
     top_n:     持仓数量（默认 20）
     max_price: 价格上限（默认 130）
 """
+import os
 import pickle
 import pandas as pd
 from rqalpha.api import *
+from rqalpha.utils import is_valid_price
 
 
 def init(context):
@@ -19,18 +21,40 @@ def init(context):
     context.max_price = params.get('max_price', 130)
     context.last_rebalance_month = None
 
-    # 加载债券池，保留 listed_date 用于回测时按上市日期过滤
+    # 已知数据不全的债券，回测时跳过
+    context.skip_bonds = {
+        '124017.SZ',  # 数据起始晚于上市63天（2022-08-25上市, 数据从2022-10-27开始）
+        '124024.SZ',  # 数据起始晚于上市21天 + 中间缺465天
+        '123029.SZ',  # 数据提前448天终止（2024-05-27断档, 2025-08-18才退市）
+        '123099.SZ',  # 数据中间缺42天（2024-05-27 ~ 2024-07-08）
+        '128044.SZ',  # maturity_date=2024-08-14 但 de_listed_date 为空, 数据含大量僵尸记录
+        '113575.SH',  # maturity_date=2026-04-09 但 de_listed_date 为空
+    }
+
     with open(r'D:\datas\bundle\cb_instruments.pk', 'rb') as f:
         cb_list = pickle.load(f)
+
+    # 加载赎回公告数据（文件不存在时回退为空 dict，兼容旧数据）
+    _redemption_path = r'D:\datas\bundle\cb_redemption.pk'
+    _redemption = {}
+    if os.path.exists(_redemption_path):
+        with open(_redemption_path, 'rb') as f:
+            _redemption = pickle.load(f)
+        logger.info(f'赎回数据: {len(_redemption)} 条')
+
     context.cb_pool = []
     for i in cb_list:
+        code = i['order_book_id']
+        r = _redemption.get(code, {})
         context.cb_pool.append((
-            i['order_book_id'],
+            code,
             i.get('listed_date', '0000-00-00'),
             i.get('de_listed_date', '0000-00-00'),
+            r.get('ann_date', '0000-00-00'),
+            r.get('call_reg_date', '0000-00-00'),
         ))
 
-    logger.info(f'可转债池: {len(context.cb_pool)} 只')
+    logger.info(f'可转债池: {len(context.cb_pool)} 只, 跳过数据不全: {len(context.skip_bonds)} 只')
 
 
 def handle_bar(context, bar_dict):
@@ -42,16 +66,26 @@ def handle_bar(context, bar_dict):
     scores = []
     too_high = 0
 
-    for ob, listed_date, delisted_date in context.cb_pool:
+    for ob, listed_date, de_listed_date, ann_date, call_reg_date in context.cb_pool:
         if listed_date != '0000-00-00' and pd.Timestamp(listed_date) > context.now:
             continue
-        if delisted_date != '0000-00-00' and pd.Timestamp(delisted_date) < context.now:
+        if de_listed_date != '0000-00-00' and pd.Timestamp(de_listed_date) < context.now:
             continue
+        # 赎回公告已发 + 登记日已过 → 已不可交易
+        if ann_date != '0000-00-00' and pd.Timestamp(ann_date) <= context.now:
+            if call_reg_date != '0000-00-00' and pd.Timestamp(call_reg_date) < context.now:
+                continue
 
         bar = history_bars(ob, 1, '1d', ['close', 'cb_over_rate'])
+        if len(bar) == 0:
+            if ob in context.skip_bonds:
+                continue
+
         price = bar['close'][0]
         premium = bar['cb_over_rate'][0]
 
+        if not is_valid_price(price):
+            continue
         if price > context.max_price:
             too_high += 1
             continue
@@ -81,6 +115,10 @@ def handle_bar(context, bar_dict):
 
     # 等权买入
     weight = 1.0 / len(selected)
+    # DEBUG
+    logger.info(f'[DEBUG] before buy: total_value={context.portfolio.total_value} cash={context.portfolio.cash}')
+    for pos in list(context.portfolio.positions.values()):
+        logger.info(f'[DEBUG]   pos {pos.order_book_id} qty={pos.quantity} avg_price={pos.avg_price} mv={pos.market_value}')
     for ob, *_ in selected:
         order_target_percent(ob, weight)
 
