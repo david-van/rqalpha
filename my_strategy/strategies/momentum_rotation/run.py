@@ -17,7 +17,7 @@ from rqalpha import run_file
 # ==================== 基础配置 ====================
 STRATEGY_FILE = os.path.join(project_root, 'my_strategy/strategies/momentum_rotation/momentum.py')
 RESULT_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results'
-RESULT_DIR = RESULT_DIR.joinpath("lihai_pool")
+RESULT_DIR = RESULT_DIR.joinpath("momentum_rotation")
 RESULT_DIR.mkdir(exist_ok=True)
 
 
@@ -27,11 +27,11 @@ def make_base_config(tag: str):
         "base": {
             "strategy_file": STRATEGY_FILE,
             "data_bundle_path": r"D:\datas\bundle",
-            "start_date": "2020-01-01",
+            "start_date": "2018-01-01",
             "end_date":   "2026-01-01",
             "frequency":  "1d",
             "slippage":   '0.0',
-            "accounts":   {"stock": 50000},
+            "accounts":   {"stock": 10000},
         },
         "mod": {
             "sys_transaction_cost": {
@@ -64,9 +64,12 @@ def make_base_config(tag: str):
 #
 # 【模式说明】切换下方模式之一，注释掉其余：
 #
-#   模式C — 二维网格 m_days × switch_threshold（默认）
+#   模式F — ETF池对比：上证180 vs 价值100ETF（默认参数，当前激活）
+#   模式C — 二维网格 m_days × switch_threshold
 #   模式D — 三维网格 m_days × switch_threshold × decay_ratio（5×5×5=125组）
 #   模式E — 单扫 decay_ratio（固定 m_days=25, switch_threshold=1.0）
+#   模式A — 只扫 m_days
+#   模式B — 只扫 switch_threshold
 #
 # tag 命名规则：
 #   m{d}          → m_days=d
@@ -105,12 +108,18 @@ def _make_override(d, t, r=1.0):
         override["switch_threshold"] = t
     return override
 
-# 模式C：二维网格（m_days × switch_threshold），共 len(_M_DAYS_LIST) × len(_THRESHOLD_LIST) 组
+# 模式F：ETF池对比 —— 上证180(510180) vs 价值100ETF(512040)，全默认参数
 EXPERIMENTS = [
-    (_make_tag(d, t), _make_override(d, t))
-    for d in _M_DAYS_LIST
-    for t in _THRESHOLD_LIST
+    ("baseline",  {}),
+    # ("value100",  {"etf_replace": {"510180.XSHG": "512040.XSHG"}}),
 ]
+
+# 模式C：二维网格（m_days × switch_threshold），共 len(_M_DAYS_LIST) × len(_THRESHOLD_LIST) 组
+# EXPERIMENTS = [
+#     (_make_tag(d, t), _make_override(d, t))
+#     for d in _M_DAYS_LIST
+#     for t in _THRESHOLD_LIST
+# ]
 
 # 模式D：三维网格（m_days × switch_threshold × decay_ratio），样本多，按需开启
 # EXPERIMENTS = [
@@ -126,14 +135,14 @@ EXPERIMENTS = [
 #     for r in _DECAY_RATIO_LIST
 # ]
 
-# 模式A：只扫 m_days（注释掉模式C，取消下方注释）
+# 模式A：只扫 m_days（注释掉模式F，取消下方注释）
 # _M_DAYS_LIST = [5, 8, 10, 15, 18, 20, 22, 25, 28, 30, 35, 40, 50, 60]
 # EXPERIMENTS = [
 #     ("baseline" if d == 25 else f"mdays_{d:02d}", {} if d == 25 else {"scorer_momentum_r2": {"m_days": d}})
 #     for d in _M_DAYS_LIST
 # ]
 
-# 模式B：只扫 switch_threshold（注释掉模式C，取消下方注释）
+# 模式B：只扫 switch_threshold（注释掉模式F，取消下方注释）
 # _THRESHOLD_LIST = [1.0, 1.05, 1.10, 1.15, 1.20]
 # EXPERIMENTS = [
 #     ("baseline" if t == 1.0 else f"t{int(t * 100):03d}", {} if t == 1.0 else {"switch_threshold": t})
