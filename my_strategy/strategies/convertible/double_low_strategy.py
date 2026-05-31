@@ -43,21 +43,46 @@ def init(context):
         logger.info(f'赎回数据: {len(_redemption)} 条')
 
     context.cb_pool = []
+    context.redemption_info = {}  # order_book_id -> (ann_date, call_reg_date)
+    context.bond_dates = {}       # order_book_id -> (de_listed_date, maturity_date)
     for i in cb_list:
         code = i['order_book_id']
         r = _redemption.get(code, {})
+        ann = r.get('ann_date', '0000-00-00')
+        reg = r.get('call_reg_date', '0000-00-00')
+        dl = i.get('de_listed_date', '0000-00-00')
+        mat = i.get('maturity_date', '0000-00-00')
         context.cb_pool.append((
             code,
             i.get('listed_date', '0000-00-00'),
-            i.get('de_listed_date', '0000-00-00'),
-            r.get('ann_date', '0000-00-00'),
-            r.get('call_reg_date', '0000-00-00'),
+            dl,
+            mat,
+            ann,
+            reg,
         ))
+        context.redemption_info[code] = (ann, reg)
+        context.bond_dates[code] = (dl, mat)
 
     logger.info(f'可转债池: {len(context.cb_pool)} 只, 跳过数据不全: {len(context.skip_bonds)} 只')
 
 
 def handle_bar(context, bar_dict):
+    # 每日检查：持仓债券如已发赎回公告，立即卖出
+    for pos in list(context.portfolio.positions.values()):
+        if pos.market_value <= 0:
+            continue
+        ann_date, _ = context.redemption_info.get(pos.order_book_id, ('0000-00-00', '0000-00-00'))
+        if ann_date != '0000-00-00' and pd.Timestamp(ann_date) <= context.now:
+            logger.info(f'赎回公告卖出: {pos.order_book_id} 公告日 {ann_date}')
+            order_target_percent(pos.order_book_id, 0)
+            continue
+        # 自然到期检查：de_listed_date 为空时，用 maturity_date 判断
+        dl_date, mat_date = context.bond_dates.get(pos.order_book_id, ('0000-00-00', '0000-00-00'))
+        if dl_date == '0000-00-00' and mat_date not in ('0000-00-00', '2999-12-31'):
+            if pd.Timestamp(mat_date) < context.now:
+                logger.info(f'到期卖出: {pos.order_book_id} 到期日 {mat_date}')
+                order_target_percent(pos.order_book_id, 0)
+
     current_month = context.now.month
     if current_month == context.last_rebalance_month:
         return
@@ -66,15 +91,18 @@ def handle_bar(context, bar_dict):
     scores = []
     too_high = 0
 
-    for ob, listed_date, de_listed_date, ann_date, call_reg_date in context.cb_pool:
+    for ob, listed_date, de_listed_date, maturity_date, ann_date, call_reg_date in context.cb_pool:
         if listed_date != '0000-00-00' and pd.Timestamp(listed_date) > context.now:
             continue
         if de_listed_date != '0000-00-00' and pd.Timestamp(de_listed_date) < context.now:
             continue
-        # 赎回公告已发 + 登记日已过 → 已不可交易
-        if ann_date != '0000-00-00' and pd.Timestamp(ann_date) <= context.now:
-            if call_reg_date != '0000-00-00' and pd.Timestamp(call_reg_date) < context.now:
+        # de_listed_date 为空时，用 maturity_date 兜底判断是否已到期
+        if de_listed_date == '0000-00-00' and maturity_date not in ('0000-00-00', '2999-12-31'):
+            if pd.Timestamp(maturity_date) < context.now:
                 continue
+        # 赎回公告已发 → 已不可交易
+        if ann_date != '0000-00-00' and pd.Timestamp(ann_date) <= context.now:
+            continue
 
         bar = history_bars(ob, 1, '1d', ['close', 'cb_over_rate'])
         if len(bar) == 0:
@@ -115,10 +143,6 @@ def handle_bar(context, bar_dict):
 
     # 等权买入
     weight = 1.0 / len(selected)
-    # DEBUG
-    logger.info(f'[DEBUG] before buy: total_value={context.portfolio.total_value} cash={context.portfolio.cash}')
-    for pos in list(context.portfolio.positions.values()):
-        logger.info(f'[DEBUG]   pos {pos.order_book_id} qty={pos.quantity} avg_price={pos.avg_price} mv={pos.market_value}')
     for ob, *_ in selected:
         order_target_percent(ob, weight)
 

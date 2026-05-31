@@ -84,7 +84,7 @@ def _override(**kw):
 
 # ── 模式1: 基准单次回测 ──
 EXPERIMENTS = [
-    ("baseline", _override(top_n=20, max_price=130)),
+    ("baseline", _override(top_n=10, max_price=130)),
 ]
 
 # ── 模式2: top_n 参数扫描 ──
