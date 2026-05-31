@@ -17,7 +17,8 @@ def init(context):
     """
     scheduler.run_monthly(semi_annual_etf_check, tradingday=1)
     context.last_half_year_flag = None
-    context.output_dir = "etf_output"
+    from my_strategy.common_file import project_root
+    context.output_dir = os.path.join(project_root, 'my_strategy', 'strategy_lab', 'batch_results', 'etf_pool')
     os.makedirs(context.output_dir, exist_ok=True)
     logger.info("========== 策略初始化完成 ==========")
     logger.info("策略说明：每半年（1月和7月）统计一次市场ETF数量，并输出CSV文件")
