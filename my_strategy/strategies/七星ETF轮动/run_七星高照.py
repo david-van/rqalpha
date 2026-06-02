@@ -31,10 +31,10 @@ def make_base_config(tag: str):
         "base": {
             "strategy_file": STRATEGY_FILE,
             "data_bundle_path": r"D:\datas\bundle",
-            "start_date": "2019-01-01",
+            "start_date": "2020-01-01",
             "end_date":   "2026-01-01",
             "frequency":  "1d",
-            "accounts":   {"stock": 100000},
+            "accounts":   {"stock": 20000},
         },
         "mod": {
             "sys_transaction_cost": {
@@ -56,7 +56,8 @@ def make_base_config(tag: str):
             },
         },
         "extra": {
-            "log_level": "error",
+            "log_level": "",
+            "log_file": str(Path(__file__).with_name("backtest.log")),
             "context_vars": {},
         },
     }
