@@ -10,8 +10,7 @@
 策略逻辑：
 - 基于加权动量得分(R² × 年化收益率)对ETF池进行排名
 - 支持盈利保护、溢价率过滤、成交量过滤、短期动量过滤
-- 无目标时自动切换到防御ETF（货币基金）
-- 支持多时间点盈利保护独立检查
+- 无目标时保持空仓
 
 迁移说明：
 - 溢价率过滤依赖基金净值数据（RQAlpha原生不支持），默认关闭
@@ -77,11 +76,11 @@ class PlatformAdapter:
         return context.portfolio.positions.get(code)
 
     @staticmethod
-    def get_holdings(context, pool_codes, defensive_code):
-        """获取在池内或防御ETF中的有持仓代码列表"""
+    def get_holdings(context, pool_codes):
+        """获取在池内的有持仓代码列表"""
         return [
             c for c in context.portfolio.positions
-            if c in pool_codes or c == defensive_code
+            if c in pool_codes
         ]
 
     @staticmethod
@@ -441,84 +440,44 @@ class PremiumFilter(BaseFilter):
 # 【下单执行器】
 # ============================================================
 
-class OrderExecutor:
-    """封装下单逻辑：T+1、最小金额、容差、整手、涨跌停"""
+def smart_order(context, code, target_value):
+    """下单：停牌/涨跌停/最小金额/T+1 检查，调用 order_target_value"""
+    name = PlatformAdapter.get_name(code)
+    snap = PlatformAdapter.get_snapshot(code)
+    price = snap.last
 
-    def __init__(self, context):
-        self.ctx = context
+    if PlatformAdapter.check_suspended(code):
+        PlatformAdapter.log_info(f"{code} {name} 停牌，跳过")
+        return False
+    if price == 0:
+        PlatformAdapter.log_info(f"{code} {name} 当前价格0，跳过")
+        return False
 
-    @property
-    def min_money(self):
-        return self.ctx.params.get('min_money', 5000)
+    pos = PlatformAdapter.get_position(context, code)
+    current_val = pos.market_value if pos else 0.0
 
-    def order_to(self, code, target_value):
-        """
-        智能下单：根据目标市值调整持仓
+    if target_value > 0 and abs(current_val - target_value) <= target_value * 0.05:
+        return False
 
-        Returns:
-            bool: 是否成功下单
-        """
-        name = PlatformAdapter.get_name(code)
-        snap = PlatformAdapter.get_snapshot(code)
-        price = snap.last
+    if target_value > current_val and price >= snap.limit_up:
+        PlatformAdapter.log_info(f"{code} {name} 涨停，跳过买入")
+        return False
+    if target_value < current_val and price <= snap.limit_down:
+        PlatformAdapter.log_info(f"{code} {name} 跌停，跳过卖出")
+        return False
 
-        if PlatformAdapter.check_suspended(code):
-            PlatformAdapter.log_info(f"{code} {name} 停牌，跳过")
+
+    if target_value < current_val:
+        sellable = pos.sellable if pos else 0
+        if sellable == 0:
+            PlatformAdapter.log_info(f"{code} {name} 当天买入不可卖出")
             return False
 
-        if price == 0:
-            PlatformAdapter.log_info(f"{code} {name} 当前价格0，跳过")
-            return False
-
-        pos = PlatformAdapter.get_position(self.ctx, code)
-        current_val = pos.market_value if pos else 0.0
-
-        # 5% 容差
-        if target_value > 0 and abs(current_val - target_value) <= target_value * 0.05:
-            return False
-
-        # 涨跌停
-        if target_value > current_val and price >= snap.limit_up:
-            PlatformAdapter.log_info(f"{code} {name} 涨停，跳过买入")
-            return False
-        if target_value < current_val and price <= snap.limit_down:
-            PlatformAdapter.log_info(f"{code} {name} 跌停，跳过卖出")
-            return False
-
-        # 最小交易金额
-        trade_val = abs(target_value - current_val)
-        if 0 < trade_val < self.min_money:
-            PlatformAdapter.log_info(f"{code} {name} 交易金额{trade_val:.2f} < {self.min_money}，跳过")
-            return False
-
-        # T+1 处理
-        if target_value < current_val:
-            sellable = pos.sellable if pos else 0
-            if sellable == 0:
-                PlatformAdapter.log_info(f"{code} {name} 当天买入不可卖出")
-                return False
-
-        # 计算目标股数（按100股取整）
-        target_amount = int(target_value / price)
-        target_amount = (target_amount // 100) * 100
-        if target_amount <= 0 and target_value > 0:
-            target_amount = 100
-        cur_amount = pos.quantity if pos else 0
-        diff = target_amount - cur_amount
-
-        if diff == 0:
-            return False
-
-        order_result = PlatformAdapter.order_target(code, target_value)
-        if order_result:
-            action = "买入" if diff > 0 else "卖出"
-            PlatformAdapter.log_info(
-                f"📦 {action}: {code} {name} 数量{abs(diff)} 目标市值{target_value:.2f}"
-            )
-            return True
-        else:
-            PlatformAdapter.log_warn(f"下单失败: {code} {name}")
-            return False
+    if PlatformAdapter.order_target(code, target_value):
+        PlatformAdapter.log_info(f"📦 下单: {code} {name} 目标市值{target_value:.2f}")
+        return True
+    PlatformAdapter.log_warn(f"下单失败: {code} {name}")
+    return False
 
 
 # ============================================================
@@ -526,15 +485,13 @@ class OrderExecutor:
 # ============================================================
 
 class StrategyEngine:
-    """组合打分 + 过滤 + 选股 + 排名缓存 + 防御ETF"""
+    """组合打分 + 过滤 + 选股 + 排名缓存"""
 
-    def __init__(self, scorer, filters, top_n, defensive_etf, etf_pool, order_executor):
+    def __init__(self, scorer, filters, top_n, etf_pool):
         self.scorer = scorer
         self.filters = filters
         self.top_n = top_n
-        self.defensive_etf = defensive_etf
         self.etf_pool = etf_pool
-        self.order = order_executor
         self._cache_date = None
         self._cached_rankings = None
         self._cached_scores = None
@@ -565,14 +522,7 @@ class StrategyEngine:
 
         candidates = ranked[:self.top_n]
         if not candidates:
-            if self._defensive_available(context):
-                candidates = [self.defensive_etf]
-                PlatformAdapter.log_info(
-                    f"🛡️ 进入防御模式，选择防御ETF：{self.defensive_etf} "
-                    f"{PlatformAdapter.get_name(self.defensive_etf)}"
-                )
-            else:
-                PlatformAdapter.log_info("💤 无目标ETF且防御不可用，保持空仓")
+            PlatformAdapter.log_info("💤 无目标ETF，保持空仓")
         return candidates
 
     def _refresh_cache(self, context):
@@ -640,20 +590,6 @@ class StrategyEngine:
             self._cache_date = context.now.date()
         return self._cached_metrics
 
-    def _defensive_available(self, context):
-        code = self.defensive_etf
-        if PlatformAdapter.check_suspended(code):
-            PlatformAdapter.log_debug(f"防御ETF {code} {PlatformAdapter.get_name(code)} 停牌")
-            return False
-        snap = PlatformAdapter.get_snapshot(code)
-        if snap.last >= snap.limit_up:
-            PlatformAdapter.log_debug(f"防御ETF {code} {PlatformAdapter.get_name(code)} 涨停")
-            return False
-        if snap.last <= snap.limit_down:
-            PlatformAdapter.log_debug(f"防御ETF {code} {PlatformAdapter.get_name(code)} 跌停")
-            return False
-        return True
-
 
 # ============================================================
 # 【交易函数】
@@ -671,74 +607,21 @@ def check_positions(context, bar_dict=None):
             )
 
 
-def profit_protection_check(context, bar_dict=None):
-    """独立执行的盈利保护检查，遍历所有持仓"""
-    params = context.params
-    pp_config = params['filter_profit_protection']
-    if not pp_config['enabled']:
-        PlatformAdapter.log_debug("盈利保护模块已关闭，跳过检查")
-        return
-
-    PlatformAdapter.log_info("========== 盈利保护独立检查开始 ==========")
-    pp_filter = ProfitProtectionFilter(
-        enabled=True,
-        lookback=pp_config['lookback'],
-        threshold=pp_config['threshold'],
-    )
-    for code in list(context.portfolio.positions.keys()):
-        if code not in params['etf_pool'] and code != params['defensive_etf']:
-            continue
-        pos = context.portfolio.positions[code]
-        if pos.quantity > 0:
-            if pp_filter.check(code, context):
-                if context.engine.order.order_to(code, 0):
-                    PlatformAdapter.log_info(
-                        f"🛡️ 盈利保护卖出（独立检查）：{code} {PlatformAdapter.get_name(code)}"
-                    )
-    PlatformAdapter.log_info("========== 盈利保护独立检查完成 ==========")
-
-
 def sell_trade(context, bar_dict=None):
     """卖出不符合条件的持仓"""
     PlatformAdapter.log_info("========== 卖出操作开始 ==========")
 
-    engine = context.engine
-    params = context.params
-
-    candidates = engine.select(context)
-
-    # 目标ETF集合
+    candidates = context.engine.select(context)
     target_set = set(candidates)
 
-    # 卖出不在目标的持仓
     for code in list(context.portfolio.positions.keys()):
-        if code not in params['etf_pool'] and code != params['defensive_etf']:
+        if code not in context.params['etf_pool']:
             continue
         if code not in target_set:
             pos = context.portfolio.positions[code]
             if pos.quantity > 0:
-                if engine.order.order_to(code, 0):
+                if smart_order(context, code, 0):
                     PlatformAdapter.log_info(f"📤 卖出不在目标的持仓：{code} {PlatformAdapter.get_name(code)}")
-
-    # 溢价率检查（使用前一日净值）
-    if params['filter_premium']['enabled']:
-        premium_filter = PremiumFilter(
-            enabled=True,
-            threshold=params['filter_premium']['threshold'],
-        )
-        prev_date = PlatformAdapter.prev_trading_date(context.now)
-        for code in list(context.portfolio.positions.keys()):
-            if code not in params['etf_pool'] and code != params['defensive_etf']:
-                continue
-            pos = context.portfolio.positions[code]
-            if pos.quantity > 0:
-                premium, _, _ = premium_filter.get_premium_rate(code, prev_date)
-                if premium is not None and premium > premium_filter.threshold:
-                    if engine.order.order_to(code, 0):
-                        PlatformAdapter.log_info(
-                            f"🚨 溢价率过高 {code} {PlatformAdapter.get_name(code)} "
-                            f"溢价率{premium*100:.2f}% > {premium_filter.threshold*100:.0f}%，卖出"
-                        )
 
     PlatformAdapter.log_info("========== 卖出操作完成 ==========")
 
@@ -763,84 +646,13 @@ def buy_trade(context, bar_dict=None):
             )
 
     candidates = engine.select(context)
-    target_etfs = []
+    if not candidates:
+        PlatformAdapter.log_info("💤 无目标ETF，保持空仓")
+        return
 
-    prev_date = None
-    if params['filter_premium']['enabled']:
-        prev_date = PlatformAdapter.prev_trading_date(context.now)
-        premium_filter = PremiumFilter(
-            enabled=True,
-            threshold=params['filter_premium']['threshold'],
-        )
-
-    pp_config = params['filter_profit_protection']
-    pp_filter = None
-    if pp_config['enabled']:
-        pp_filter = ProfitProtectionFilter(
-            enabled=True,
-            lookback=pp_config['lookback'],
-            threshold=pp_config['threshold'],
-        )
-
-    for code in candidates:
-        if len(target_etfs) >= params['holdings_num']:
-            break
-
-        # 得分阈值检查
-        metrics = next((m for m in rankings if m['etf'] == code), None)
-        if metrics and metrics['score'] < params['filter_score_range']['min']:
-            continue
-
-        # 盈利保护检查（买入前再次检查）
-        if pp_filter and pp_filter.check(code, context):
-            PlatformAdapter.log_info(
-                f"🚫 {code} {PlatformAdapter.get_name(code)} 触发盈利保护，从买入候选列表中排除"
-            )
-            continue
-
-        # 溢价率过滤
-        if params['filter_premium']['enabled']:
-            if prev_date is None:
-                prev_date = PlatformAdapter.prev_trading_date(context.now)
-            premium, price, net = premium_filter.get_premium_rate(code, prev_date)
-            if premium is None:
-                PlatformAdapter.log_info(
-                    f"⚠️ {code} {PlatformAdapter.get_name(code)} 无法获取溢价率，视为不合格，跳过"
-                )
-                continue
-            if premium > premium_filter.threshold:
-                PlatformAdapter.log_info(
-                    f"🚫 {code} {PlatformAdapter.get_name(code)} "
-                    f"溢价率{premium*100:.2f}% > {premium_filter.threshold*100:.0f}%，跳过"
-                )
-                continue
-            PlatformAdapter.log_info(
-                f"✅ {code} {PlatformAdapter.get_name(code)} "
-                f"溢价率{premium*100:.2f}% ≤ {premium_filter.threshold*100:.0f}%，通过"
-            )
-
-        target_etfs.append(code)
-        m_name = metrics['etf_name'] if metrics else PlatformAdapter.get_name(code)
-        m_score = metrics['score'] if metrics else 0
-        PlatformAdapter.log_info(f"🎯 目标ETF {len(target_etfs)}: {code} {m_name} 得分{m_score:.4f}")
-
-    # 防御模式
-    if not target_etfs:
-        if engine._defensive_available(context):
-            target_etfs = [params['defensive_etf']]
-            PlatformAdapter.log_info(
-                f"🛡️ 进入防御模式，选择防御ETF：{params['defensive_etf']} "
-                f"{PlatformAdapter.get_name(params['defensive_etf'])}"
-            )
-        else:
-            PlatformAdapter.log_info("💤 无目标ETF且防御不可用，保持空仓")
-            return
-
-    # 检查是否有持仓需要先卖出
-    current_positions = PlatformAdapter.get_holdings(
-        context, params['etf_pool'], params['defensive_etf']
-    )
-    to_sell = [c for c in current_positions if c not in target_etfs]
+    # 安全检查：sell_trade 是否已清完不在目标的持仓
+    current_positions = PlatformAdapter.get_holdings(context, params['etf_pool'])
+    to_sell = [c for c in current_positions if c not in candidates]
     if to_sell:
         names = [PlatformAdapter.get_name(c) for c in to_sell]
         PlatformAdapter.log_info(
@@ -850,13 +662,13 @@ def buy_trade(context, bar_dict=None):
 
     # 等权分配
     total_val = context.portfolio.total_value
-    target_per_etf = total_val / len(target_etfs)
+    target_per_etf = total_val / len(candidates)
 
-    for code in target_etfs:
+    for code in candidates:
         pos = PlatformAdapter.get_position(context, code)
         current_val = pos.market_value if pos else 0.0
         if abs(current_val - target_per_etf) > target_per_etf * 0.05 or current_val == 0:
-            engine.order.order_to(code, target_per_etf)
+            smart_order(context, code, target_per_etf)
 
     PlatformAdapter.log_info("========== 买入操作完成 ==========")
 
@@ -879,8 +691,6 @@ DEFAULT_PARAMS = {
 
     # === 核心参数 ===
     'holdings_num': 1,
-    'defensive_etf': "511880.XSHG",   # 银华日利（货币ETF）
-    'min_money': 5000,
 
     # === 打分器 ===
     'scorer': {
@@ -907,36 +717,7 @@ DEFAULT_PARAMS = {
     'filter_premium': {
         'enabled': False, 'threshold': 0.20,
     },
-
-    # === 独立检查 ===
-    'profit_protection_check_times': ['11:00'],
 }
-
-# 扁平 key → (顶层 key, 嵌套 key) 映射，向后兼容 run_七星高照.py
-FLAT_KEY_MAP = {
-    'lookback_days':              ('scorer', 'm_days'),
-    'holdings_num':               (None, 'holdings_num'),
-    'defensive_etf':              (None, 'defensive_etf'),
-    'min_money':                  (None, 'min_money'),
-    'etf_pool':                   (None, 'etf_pool'),
-    'enable_profit_protection':   ('filter_profit_protection', 'enabled'),
-    'profit_protection_lookback': ('filter_profit_protection', 'lookback'),
-    'profit_protection_threshold':('filter_profit_protection', 'threshold'),
-    'profit_protection_check_times': (None, 'profit_protection_check_times'),
-    'loss_threshold':             ('filter_single_day_loss', 'threshold'),
-    'min_score_threshold':        ('filter_score_range', 'min'),
-    'max_score_threshold':        ('filter_score_range', 'max'),
-    'use_short_momentum_filter':  ('filter_short_momentum', 'enabled'),
-    'short_lookback_days':        ('filter_short_momentum', 'lookback_days'),
-    'short_momentum_threshold':   ('filter_short_momentum', 'threshold'),
-    'enable_volume_check':        ('filter_volume', 'enabled'),
-    'volume_lookback':            ('filter_volume', 'lookback'),
-    'volume_threshold':           ('filter_volume', 'threshold'),
-    'volume_return_limit':        ('filter_volume', 'return_limit'),
-    'enable_premium_filter':      ('filter_premium', 'enabled'),
-    'premium_threshold':          ('filter_premium', 'threshold'),
-}
-
 
 def _to_plain_dict(obj):
     """递归将 RqAttrDict 转为普通 dict"""
@@ -946,22 +727,13 @@ def _to_plain_dict(obj):
 
 
 def _deep_merge_params(defaults, injected):
-    """将扁平注入参数合并到嵌套 DEFAULT_PARAMS 中"""
+    """将注入参数合并到嵌套 DEFAULT_PARAMS 中"""
     params = {k: (v.copy() if isinstance(v, dict) else v) for k, v in defaults.items()}
     for k, v in injected.items():
-        if k in FLAT_KEY_MAP:
-            top_key, nested_key = FLAT_KEY_MAP[k]
-            if top_key is None:
-                params[nested_key] = v
-            else:
-                params[top_key][nested_key] = v
-        elif k in params:
-            if isinstance(params[k], dict) and isinstance(v, dict):
-                params[k].update(v)
-            else:
-                params[k] = v
+        if k in params and isinstance(params[k], dict) and isinstance(v, dict):
+            params[k].update(v)
         else:
-            PlatformAdapter.log_warn(f"未知参数 '{k}'，已忽略")
+            params[k] = v
     return params
 
 
@@ -1015,14 +787,11 @@ def _common_init(context):
 
     scorer, filters = build_components(params)
 
-    order_executor = OrderExecutor(context)
     engine = StrategyEngine(
         scorer=scorer,
         filters=filters,
         top_n=params['holdings_num'],
-        defensive_etf=params['defensive_etf'],
         etf_pool=params['etf_pool'],
-        order_executor=order_executor,
     )
 
     context.params = params
@@ -1031,14 +800,6 @@ def _common_init(context):
     PlatformAdapter.register_schedule(check_positions, hour=9, minute=10)
     PlatformAdapter.register_schedule(sell_trade, hour=14, minute=0)
     PlatformAdapter.register_schedule(buy_trade, hour=14, minute=1)
-
-    for check_time in params['profit_protection_check_times']:
-        h, m = check_time.split(':')
-        PlatformAdapter.register_schedule(
-            profit_protection_check,
-            hour=int(h), minute=int(m)
-        )
-        PlatformAdapter.log_info(f"已注册盈利保护检查时间：{check_time}")
 
     PlatformAdapter.log_info(
         f"策略初始化完成：ETF池{len(params['etf_pool'])}只，"

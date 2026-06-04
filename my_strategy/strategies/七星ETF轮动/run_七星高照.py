@@ -91,7 +91,7 @@ EXPERIMENTS = [
 # EXPERIMENTS = [
 #     ("baseline", {}),
 # ] + [
-#     (f"lookback{d:02d}", {"lookback_days": d})
+#     (f"lookback{d:02d}", {"scorer": {"m_days": d}})
 #     for d in [15, 20, 30, 35, 40]
 # ]
 
@@ -105,7 +105,7 @@ EXPERIMENTS = [
 # EXPERIMENTS = [
 #     ("baseline", {}),
 # ] + [
-#     (f"prot{t*100:03.0f}", {"profit_protection_threshold": t})
+#     (f"prot{t*100:03.0f}", {"filter_profit_protection": {"threshold": t}})
 #     for t in [0.03, 0.05, 0.07, 0.10]
 # ]
 
@@ -113,20 +113,20 @@ EXPERIMENTS = [
 # EXPERIMENTS = [
 #     ("baseline", {}),
 # ] + [
-#     (f"short{t*100:03.0f}", {"short_momentum_threshold": t})
+#     (f"short{t*100:03.0f}", {"filter_short_momentum": {"threshold": t}})
 #     for t in [-0.1, -0.05, 0.0, 0.05, 0.1]
 # ]
 
 # ---- 模式G: 过滤开关对比 ----
 # EXPERIMENTS = [
 #     ("all_on", {}),
-#     ("no_volume", {"enable_volume_check": False}),
-#     ("no_short", {"use_short_momentum_filter": False}),
-#     ("no_profit", {"enable_profit_protection": False}),
+#     ("no_volume", {"filter_volume": {"enabled": False}}),
+#     ("no_short", {"filter_short_momentum": {"enabled": False}}),
+#     ("no_profit", {"filter_profit_protection": {"enabled": False}}),
 #     ("all_off", {
-#         "enable_volume_check": False,
-#         "use_short_momentum_filter": False,
-#         "enable_profit_protection": False,
+#         "filter_volume": {"enabled": False},
+#         "filter_short_momentum": {"enabled": False},
+#         "filter_profit_protection": {"enabled": False},
 #     }),
 # ]
 
