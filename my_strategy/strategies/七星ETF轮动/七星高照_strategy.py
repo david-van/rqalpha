@@ -371,6 +371,42 @@ class SingleDayLossFilter(BaseFilter):
         return result
 
 
+class ListingFilter(BaseFilter):
+    """未上市过滤：排除尚未上市的 ETF"""
+    name = 'listing'
+
+    def filter(self, context, ranked_list, scores):
+        if not self.enabled:
+            return ranked_list
+        result = []
+        for etf in ranked_list:
+            try:
+                if context.now.date() < PlatformAdapter.get_instrument(etf).listed_date.date():
+                    PlatformAdapter.log_debug(f"{etf} {PlatformAdapter.get_name(etf)} 未上市，跳过")
+                    continue
+            except Exception:
+                PlatformAdapter.log_warn(f"未上市过滤 {etf}")
+                continue
+            result.append(etf)
+        return result
+
+
+class SuspensionFilter(BaseFilter):
+    """停牌过滤：排除停牌的 ETF"""
+    name = 'suspension'
+
+    def filter(self, context, ranked_list, scores):
+        if not self.enabled:
+            return ranked_list
+        result = []
+        for etf in ranked_list:
+            if PlatformAdapter.check_suspended(etf):
+                PlatformAdapter.log_debug(f"{etf} {PlatformAdapter.get_name(etf)} 停牌，跳过")
+            else:
+                result.append(etf)
+        return result
+
+
 class ScoreRangeFilter(BaseFilter):
     """得分范围过滤：得分必须在 (min, max) 区间内"""
     name = 'score_range'
@@ -441,7 +477,7 @@ class PremiumFilter(BaseFilter):
 # ============================================================
 
 def smart_order(context, code, target_value):
-    """下单：停牌/涨跌停/最小金额/T+1 检查，调用 order_target_value"""
+    """下单：停牌/涨跌停/T+1 检查，调用 order_target_value"""
     name = PlatformAdapter.get_name(code)
     snap = PlatformAdapter.get_snapshot(code)
     price = snap.last
@@ -456,16 +492,12 @@ def smart_order(context, code, target_value):
     pos = PlatformAdapter.get_position(context, code)
     current_val = pos.market_value if pos else 0.0
 
-    if target_value > 0 and abs(current_val - target_value) <= target_value * 0.05:
-        return False
-
     if target_value > current_val and price >= snap.limit_up:
         PlatformAdapter.log_info(f"{code} {name} 涨停，跳过买入")
         return False
     if target_value < current_val and price <= snap.limit_down:
         PlatformAdapter.log_info(f"{code} {name} 跌停，跳过卖出")
         return False
-
 
     if target_value < current_val:
         sellable = pos.sellable if pos else 0
@@ -534,18 +566,6 @@ class StrategyEngine:
         raw_scores = self.scorer.score(context, self.etf_pool)
 
         for etf in self.etf_pool:
-            # 未上市过滤
-            try:
-                if context.now.date() < PlatformAdapter.get_instrument(etf).listed_date.date():
-                    continue
-            except Exception:
-                PlatformAdapter.log_warn(f"未上市过滤 {etf}")
-                pass
-            # 停牌过滤
-            if PlatformAdapter.check_suspended(etf):
-                PlatformAdapter.log_debug(f"{etf} {PlatformAdapter.get_name(etf)} 停牌，跳过")
-                continue
-
             score = raw_scores.get(etf, float('-inf'))
             if score == float('-inf'):
                 continue
@@ -556,17 +576,6 @@ class StrategyEngine:
             entry = cache.get(etf, {})
             ann = entry.get('annualized_returns', 0)
             r2 = entry.get('r_squared', 0)
-            current_price = entry.get('current_price', 0)
-
-            # 短期动量 (从缓存读取，用于日志展示)
-            short_lb = context.params['filter_short_momentum']['lookback_days']
-            price_series = entry.get('price_series')
-            if price_series is not None and len(price_series) >= short_lb + 1:
-                n = short_lb
-                short_ret = price_series[-1] / price_series[-(n + 1)] - 1
-                short_annualized = (1 + short_ret) ** (250 / n) - 1
-            else:
-                short_annualized = 0.0
 
             etf_metrics.append({
                 'etf': etf,
@@ -574,8 +583,6 @@ class StrategyEngine:
                 'annualized_returns': ann,
                 'r_squared': r2,
                 'score': score,
-                'current_price': current_price,
-                'short_annualized': short_annualized,
             })
 
         etf_metrics.sort(key=lambda x: x['score'], reverse=True)
@@ -665,10 +672,7 @@ def buy_trade(context, bar_dict=None):
     target_per_etf = total_val / len(candidates)
 
     for code in candidates:
-        pos = PlatformAdapter.get_position(context, code)
-        current_val = pos.market_value if pos else 0.0
-        if abs(current_val - target_per_etf) > target_per_etf * 0.05 or current_val == 0:
-            smart_order(context, code, target_per_etf)
+        smart_order(context, code, target_per_etf)
 
     PlatformAdapter.log_info("========== 买入操作完成 ==========")
 
@@ -699,6 +703,12 @@ DEFAULT_PARAMS = {
     },
 
     # === 过滤器 ===
+    'filter_listing': {
+        'enabled': True,
+    },
+    'filter_suspension': {
+        'enabled': True,
+    },
     'filter_profit_protection': {
         'enabled': True, 'lookback': 1, 'threshold': 0.05,
     },
@@ -752,6 +762,8 @@ def build_components(params):
 
     filters = []
     filter_defs = [
+        ('filter_listing', ListingFilter),
+        ('filter_suspension', SuspensionFilter),
         ('filter_profit_protection', ProfitProtectionFilter),
         ('filter_volume', VolumeFilter),
         ('filter_short_momentum', ShortMomentumFilter),
