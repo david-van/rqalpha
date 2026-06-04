@@ -32,14 +32,14 @@ def make_base_config(tag: str):
             "strategy_file": STRATEGY_FILE,
             "data_bundle_path": r"D:\datas\bundle",
             "start_date": "2020-01-01",
-            "end_date":   "2026-01-01",
+            "end_date":   "2020-05-01",
             "frequency":  "1d",
             "accounts":   {"stock": 20000},
         },
         "mod": {
             "sys_transaction_cost": {
                 "enabled": True,
-                "stock_commission_multiplier": 0.6667,   # 万2（base=万3 × 0.6667）
+                "stock_commission_multiplier": 0.25,   # 万2（base=万8 × 0.25）
                 "stock_min_commission": 5,
                 "tax_multiplier": 0,
             },
@@ -56,7 +56,7 @@ def make_base_config(tag: str):
             },
         },
         "extra": {
-            "log_level": "",
+            "log_level": "info",
             "log_file": str(Path(__file__).with_name("backtest.log")),
             "context_vars": {},
         },

@@ -76,14 +76,6 @@ class PlatformAdapter:
         return context.portfolio.positions.get(code)
 
     @staticmethod
-    def get_holdings(context, pool_codes):
-        """获取在池内的有持仓代码列表"""
-        return [
-            c for c in context.portfolio.positions
-            if c in pool_codes
-        ]
-
-    @staticmethod
     def order_target(code, value):
         return order_target_value(code, value)
 
@@ -182,7 +174,6 @@ class MomentumR2Scorer(BaseScorer):
                     'annualized_returns': ann,
                     'r_squared': r2,
                     'price_series': price_series,
-                    'current_price': current_price,
                 }
                 out[etf] = score
             except Exception as e:
@@ -219,9 +210,7 @@ class ProfitProtectionFilter(BaseFilter):
         self.threshold = threshold
 
     def check(self, code, context):
-        """检查单只ETF是否触发盈利保护（供独立检查复用）"""
-        if not self.enabled:
-            return False
+        """检查单只ETF是否触发盈利保护"""
         high = PlatformAdapter.get_bars(code, self.lookback, 'high')
         if high is None or len(high) < self.lookback:
             PlatformAdapter.log_debug(
@@ -453,6 +442,7 @@ class PremiumFilter(BaseFilter):
         return premium_rate, price, net_value
 
     def _try_get_nav(self, code, date):
+        # TODO: 接入 RQData / akShare 等外部数据源获取基金净值
         return None
 
     def filter(self, context, ranked_list, scores):
@@ -508,7 +498,12 @@ def smart_order(context, code, target_value):
     if PlatformAdapter.order_target(code, target_value):
         PlatformAdapter.log_info(f"📦 下单: {code} {name} 目标市值{target_value:.2f}")
         return True
-    PlatformAdapter.log_warn(f"下单失败: {code} {name}")
+    action = "卖出" if target_value < current_val else "买入"
+    PlatformAdapter.log_warn(
+        f"下单失败: {code} {name} {action} "
+        f"目标{target_value:.2f} 当前{current_val:.2f} "
+        f"可用现金{context.portfolio.cash:.2f} 价格{price:.3f}"
+    )
     return False
 
 
@@ -620,15 +615,20 @@ def sell_trade(context, bar_dict=None):
 
     candidates = context.engine.select(context)
     target_set = set(candidates)
+    PlatformAdapter.log_info(f"候选买入: {candidates}")
 
     for code in list(context.portfolio.positions.keys()):
         if code not in context.params['etf_pool']:
             continue
-        if code not in target_set:
-            pos = context.portfolio.positions[code]
-            if pos.quantity > 0:
-                if smart_order(context, code, 0):
-                    PlatformAdapter.log_info(f"📤 卖出不在目标的持仓：{code} {PlatformAdapter.get_name(code)}")
+        pos = context.portfolio.positions[code]
+        if code in target_set:
+            PlatformAdapter.log_info(
+                f"保留: {code} {PlatformAdapter.get_name(code)} "
+                f"持仓{pos.market_value:.2f}"
+            )
+        elif pos.quantity > 0:
+            if smart_order(context, code, 0):
+                PlatformAdapter.log_info(f"📤 卖出不在目标的持仓：{code} {PlatformAdapter.get_name(code)}")
 
     PlatformAdapter.log_info("========== 卖出操作完成 ==========")
 
@@ -657,21 +657,24 @@ def buy_trade(context, bar_dict=None):
         PlatformAdapter.log_info("💤 无目标ETF，保持空仓")
         return
 
-    # 安全检查：sell_trade 是否已清完不在目标的持仓
-    current_positions = PlatformAdapter.get_holdings(context, params['etf_pool'])
-    to_sell = [c for c in current_positions if c not in candidates]
-    if to_sell:
-        names = [PlatformAdapter.get_name(c) for c in to_sell]
-        PlatformAdapter.log_info(
-            f"尚有持仓需要卖出：{list(zip(to_sell, names))}，等待卖出完成再买入"
-        )
-        return
-
     # 等权分配
     total_val = context.portfolio.total_value
+    cash = context.portfolio.cash
     target_per_etf = total_val / len(candidates)
+    PlatformAdapter.log_info(
+        f"总资产{total_val:.2f} 现金{cash:.2f} "
+        f"候选{len(candidates)}只 每只目标{target_per_etf:.2f}"
+    )
 
     for code in candidates:
+        pos = PlatformAdapter.get_position(context, code)
+        current_val = pos.market_value if pos else 0.0
+        if current_val > 0:
+            PlatformAdapter.log_info(
+                f"已持有 {code} {PlatformAdapter.get_name(code)} "
+                f"当前{current_val:.2f}，跳过"
+            )
+            continue
         smart_order(context, code, target_per_etf)
 
     PlatformAdapter.log_info("========== 买入操作完成 ==========")
@@ -722,7 +725,7 @@ DEFAULT_PARAMS = {
         'enabled': True, 'threshold': 0.97,
     },
     'filter_score_range': {
-        'min': 0.0, 'max': 100.0,
+        'min_score': 0.0, 'max_score': 100.0,
     },
     'filter_premium': {
         'enabled': False, 'threshold': 0.20,
