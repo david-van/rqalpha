@@ -131,6 +131,23 @@ EXPERIMENTS = [
 # ]
 
 
+# ---- 模式H: decay_weight扫描 ----
+# EXPERIMENTS = [
+#     ("baseline", {}),
+# ] + [
+#     (f"decay{d*10:03.0f}", {"scorer": {"decay_weight": d}})
+#     for d in [1.0, 1.5, 2.0, 2.5, 3.0]
+# ]
+
+# ---- 模式I: 成交量阈值扫描 ----
+# EXPERIMENTS = [
+#     ("baseline", {}),
+# ] + [
+#     (f"vol{t*10:03.0f}", {"filter_volume": {"threshold": t}})
+#     for t in [1.5, 2.0, 2.5, 3.0]
+# ]
+
+
 # ==================== 单次回测 ====================
 def run_one(tag: str, param_override: dict):
     config = make_base_config(tag)

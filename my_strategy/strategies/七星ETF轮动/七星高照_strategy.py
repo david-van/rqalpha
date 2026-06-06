@@ -56,7 +56,12 @@ class PlatformAdapter:
 
     @staticmethod
     def check_suspended(code):
-        return is_suspended(code)
+        if is_suspended(code):
+            return True
+        snap = PlatformAdapter.get_snapshot(code)
+        if snap.volume == 0:
+            return True
+        return False
 
     @staticmethod
     def get_instrument(code):
@@ -613,11 +618,19 @@ def sell_trade(context, bar_dict=None):
             continue
         pos = context.portfolio.positions[code]
         if code in target_set:
+            # 排名在 top N，继续持有
             PlatformAdapter.log_info(
                 f"保留: {code} {PlatformAdapter.get_name(code)} "
                 f"持仓{pos.market_value:.2f}"
             )
+        elif PlatformAdapter.check_suspended(code):
+            # 停牌无法卖出，被迫持有
+            PlatformAdapter.log_info(
+                f"保留: {code} {PlatformAdapter.get_name(code)} "
+                f"停牌中，暂不卖出（持仓{pos.market_value:.2f}）"
+            )
         elif pos.quantity > 0:
+            # 不在候选池且可交易 → 卖出
             if smart_order(context, code, 0):
                 PlatformAdapter.log_info(f"📤 卖出不在目标的持仓：{code} {PlatformAdapter.get_name(code)}")
 
@@ -633,27 +646,47 @@ def buy_trade(context, bar_dict=None):
     candidates = engine.select(context)
     if not candidates:
         PlatformAdapter.log_info("💤 无目标ETF，保持空仓")
+        PlatformAdapter.log_info("========== 买入操作完成 ==========")
         return
 
-    # 等权分配
+    # 已持仓数量（含停牌等无法卖出的）
+    held_count = sum(
+        1 for code in context.portfolio.positions
+        if code in context.params['etf_pool']
+        and context.portfolio.positions[code].quantity > 0
+    )
+    available_slots = context.params['holdings_num'] - held_count
+
     total_val = context.portfolio.total_value
     cash = context.portfolio.cash
-    target_per_etf = total_val / len(candidates)
+    target_per_etf = total_val / context.params['holdings_num']
     PlatformAdapter.log_info(
         f"总资产{total_val:.2f} 现金{cash:.2f} "
         f"候选{len(candidates)}只 每只目标{target_per_etf:.2f}"
     )
 
-    for code in candidates:
+    ordered = 0
+    for code in candidates[:context.params['holdings_num']]:
         pos = PlatformAdapter.get_position(context, code)
         current_val = pos.market_value if pos else 0.0
         if current_val > 0:
+            # 已在持仓中，卖阶段已决定保留，无需操作
             PlatformAdapter.log_info(
-                f"已持有 {code} {PlatformAdapter.get_name(code)} "
-                f"当前{current_val:.2f}，跳过"
+                f"已持有 {code} {PlatformAdapter.get_name(code)}，无需调仓"
             )
             continue
+
+        # 走到这里说明该 candidate 未持有，需要买入
+        if available_slots <= 0:
+            # 槽位被停牌等不可卖出的仓位占用
+            PlatformAdapter.log_warn(
+                f"无法买入 {code} {PlatformAdapter.get_name(code)}："
+                f"已持有{held_count}只，无可用槽位"
+            )
+            continue
+
         smart_order(context, code, target_per_etf)
+        ordered += 1
 
     PlatformAdapter.log_info("========== 买入操作完成 ==========")
 
