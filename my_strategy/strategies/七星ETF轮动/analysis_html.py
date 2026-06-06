@@ -35,7 +35,10 @@ TRADING_DAYS_PER_YEAR = 250
 # 配置
 # ============================================================
 BASE_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results' / '七星高照'
-RESULT_DIR = BASE_DIR  # 实际使用 --sweep 参数指定子目录
+
+# 修改此处指定要分析的扫描，设为 None 则列出所有可用扫描
+# 命令行 --sweep 参数优先级高于此处
+DEFAULT_SWEEP = "m_days"
 
 # Bundle 日线数据路径
 BUNDLE_PATH = Path("D:/datas/bundle/stocks.h5")
@@ -1975,7 +1978,7 @@ def build_dashboard_html(results: dict, output_path: Path, meta: dict = None) ->
   <div class="dashboard-header">
     <h1>策略回测分析仪表盘</h1>
     <div class="meta">
-      数据目录: {RESULT_DIR} | 实验数量: {n} | 实验标签: {", ".join(tags)} | 生成时间: {generated_at}
+      数据目录: {output_path.parent} | 实验数量: {n} | 实验标签: {", ".join(tags)} | 生成时间: {generated_at}
     </div>
   </div>
 
@@ -2450,8 +2453,8 @@ def build_dashboard_html(results: dict, output_path: Path, meta: dict = None) ->
 # 主入口
 # ============================================================
 def main():
-    # 解析 --sweep 参数
-    sweep_name = None
+    # 解析 --sweep 参数（优先级高于 DEFAULT_SWEEP）
+    sweep_name = DEFAULT_SWEEP
     args = sys.argv[1:]
     for i, arg in enumerate(args):
         if arg == '--sweep' and i + 1 < len(args):
@@ -2470,6 +2473,7 @@ def main():
             print("可用的参数扫描:")
             print("\n".join(sweeps))
             print(f"\n用法: python analysis_html.py --sweep <名称>")
+            print(f"或在文件顶部设置 DEFAULT_SWEEP = \"<名称>\"")
         else:
             print("未找到任何参数扫描结果")
             print(f"请先运行 run_七星高照.py")

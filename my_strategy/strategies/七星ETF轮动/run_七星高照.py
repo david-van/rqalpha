@@ -43,8 +43,8 @@ def make_base_config(tag: str):
         "base": {
             "strategy_file": STRATEGY_FILE,
             "data_bundle_path": r"D:\datas\bundle",
-            "start_date": "2023-01-01",
-            "end_date":   "2024-12-31",
+            "start_date": "2019-01-01",
+            "end_date":   "2025-12-31",
             "frequency":  "1d",
             "accounts":   {"stock": 20000},
         },
@@ -88,23 +88,7 @@ EXPERIMENTS = [
 ]
 SWEEP_META = None
 
-# ---- 模式B: ETF池大小对比 ----
-# EXPERIMENTS = [
-#     ("small_pool", {}),
-#     ("large_pool", {"etf_pool": [
-#         "518880.XSHG", "159980.XSHE", "159985.XSHE", "501018.XSHG",
-#         "161226.XSHE", "159981.XSHE", "513100.XSHG", "159509.XSHE",
-#         "513290.XSHG", "513500.XSHG", "159529.XSHE", "513400.XSHG",
-#         "513520.XSHG", "513030.XSHG", "513080.XSHG", "513310.XSHG",
-#         "513730.XSHG", "159792.XSHE", "513130.XSHG", "513050.XSHG",
-#         "159920.XSHE", "513690.XSHG", "510300.XSHG", "510500.XSHG",
-#         "510050.XSHG", "510210.XSHG", "159915.XSHE", "588080.XSHG",
-#         "512100.XSHG", "563360.XSHG", "563300.XSHG", "512890.XSHG",
-#         "159967.XSHE", "512040.XSHG", "159201.XSHE", "511380.XSHG",
-#         "511010.XSHG", "511220.XSHG",
-#     ]}),
-# ]
-# SWEEP_META = None
+
 
 # ---- 模式C: 动量周期 m_days 扫描 ----
 # EXPERIMENTS = [
