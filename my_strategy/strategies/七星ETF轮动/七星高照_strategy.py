@@ -31,7 +31,6 @@ from rqalpha.api import (
     instruments,
     get_previous_trading_date,
 )
-from rqalpha.mod.rqalpha_mod_sys_scheduler.scheduler import physical_time
 
 
 # ============================================================
@@ -92,10 +91,6 @@ class PlatformAdapter:
         logger.debug(msg)
 
     @staticmethod
-    def register_schedule(fn, hour, minute):
-        scheduler.run_daily(fn, time_rule=physical_time(hour=hour, minute=minute))
-
-    @staticmethod
     def prev_trading_date(dt):
         return get_previous_trading_date(dt, n=1)
 
@@ -139,14 +134,15 @@ class MomentumR2Scorer(BaseScorer):
         for etf in etf_pool:
             try:
                 # 多取 extra_fetch 天数据，供 ShortMomentumFilter 等过滤器使用
-                need_days = self.m_days + self.extra_fetch + 1
+                need_days = self.m_days + self.extra_fetch
                 close = PlatformAdapter.get_bars(etf, need_days, 'close')
                 if close is None or len(close) < self.m_days:
                     out[etf] = float('-inf')
                     continue
 
-                current_price = PlatformAdapter.get_current_price(etf)
-                price_series = np.append(close, current_price)
+                price_series = close
+                current_price = float(close[-1])
+
                 recent = price_series[-(self.m_days + 1):]
                 y = np.log(recent)
                 x = np.arange(len(y))
@@ -259,7 +255,7 @@ class VolumeFilter(BaseFilter):
         result = []
         for etf in ranked_list:
             try:
-                vols = PlatformAdapter.get_bars(etf, self.lookback + 1, 'volume', include_now=True)
+                vols = PlatformAdapter.get_bars(etf, self.lookback + 1, 'volume')
                 if vols is None or len(vols) < self.lookback + 1:
                     result.append(etf)
                     continue
@@ -597,18 +593,6 @@ class StrategyEngine:
 # 【交易函数】
 # ============================================================
 
-def check_positions(context, bar_dict=None):
-    """每日开盘检查持仓状态"""
-    for code in list(context.portfolio.positions.keys()):
-        pos = context.portfolio.positions[code]
-        if pos.quantity > 0:
-            PlatformAdapter.log_info(
-                f"📊 持仓：{code} {PlatformAdapter.get_name(code)} "
-                f"数量{pos.quantity} 成本{pos.avg_price:.3f} "
-                f"现价{pos.last_price:.3f}"
-            )
-
-
 def sell_trade(context, bar_dict=None):
     """卖出不符合条件的持仓"""
     PlatformAdapter.log_info("========== 卖出操作开始 ==========")
@@ -812,9 +796,10 @@ def _common_init(context):
     context.params = params
     context.engine = engine
 
-    PlatformAdapter.register_schedule(check_positions, hour=9, minute=10)
-    PlatformAdapter.register_schedule(sell_trade, hour=14, minute=0)
-    PlatformAdapter.register_schedule(buy_trade, hour=14, minute=1)
+    # 日频("1d")下，每天只有一个 BAR 事件（15:00），
+    # 所有 run_daily 函数按 register 顺序在该 BAR 上串行执行，先卖后买。
+    scheduler.run_daily(sell_trade)
+    scheduler.run_daily(buy_trade)
 
     PlatformAdapter.log_info(
         f"策略初始化完成：ETF池{len(params['etf_pool'])}只，"
@@ -836,8 +821,3 @@ def _common_init(context):
 def init(context):
     PlatformAdapter.log_info("========== 策略初始化开始 ==========")
     _common_init(context)
-
-
-def handle_bar(context, bar_dict):
-    """所有交易逻辑已通过 scheduler.run_daily 注册"""
-    pass

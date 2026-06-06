@@ -31,8 +31,8 @@ def make_base_config(tag: str):
         "base": {
             "strategy_file": STRATEGY_FILE,
             "data_bundle_path": r"D:\datas\bundle",
-            "start_date": "2020-01-01",
-            "end_date":   "2020-05-01",
+            "start_date": "2026-01-01",
+            "end_date":   "2026-02-01",
             "frequency":  "1d",
             "accounts":   {"stock": 20000},
         },
