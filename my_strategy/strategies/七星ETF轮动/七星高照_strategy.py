@@ -141,7 +141,6 @@ class MomentumR2Scorer(BaseScorer):
                     continue
 
                 price_series = close
-                current_price = float(close[-1])
 
                 recent = price_series[-(self.m_days + 1):]
                 y = np.log(recent)
@@ -518,42 +517,25 @@ class StrategyEngine:
         self._cache_date = None
         self._cached_rankings = None
         self._cached_scores = None
+        self._cached_filtered = None
 
     def select(self, context):
-        """计算排名、过滤、返回候选ETF列表"""
-        today = context.now.date()
-        if self._cache_date != today:
-            self._refresh_cache(context)
-            self._cache_date = today
-        else:
-            PlatformAdapter.log_debug("使用缓存的ETF排名")
-
-        ranked = list(self._cached_rankings)
-        scores = dict(self._cached_scores)
-
-        for f in self.filters:
-            if not f.enabled:
-                continue
-            before = list(ranked)
-            ranked = f.filter(context, ranked, scores)
-            if before != ranked:
-                removed = [e for e in before if e not in ranked]
-                if removed:
-                    PlatformAdapter.log_debug(
-                        f"过滤器[{f.name}] 移除了: {removed}"
-                    )
-
-        candidates = ranked[:self.top_n]
+        """选股：确保已打分 → 确保已过滤 → 取前N"""
+        self._ensure_scored(context)
+        self._ensure_filtered(context)
+        candidates = self._cached_filtered[:self.top_n]
         if not candidates:
             PlatformAdapter.log_info("💤 无目标ETF，保持空仓")
         return candidates
 
-    def _refresh_cache(self, context):
+    def _ensure_scored(self, context):
+        """每日只算一次：打分、排序、存缓存"""
+        if self._cache_date == context.now.date():
+            return
         PlatformAdapter.log_info("重新计算ETF排名...")
         etf_metrics = []
         scores = {}
 
-        # 先打分
         raw_scores = self.scorer.score(context, self.etf_pool)
 
         for etf in self.etf_pool:
@@ -580,13 +562,35 @@ class StrategyEngine:
         self._cached_rankings = [m['etf'] for m in etf_metrics]
         self._cached_metrics = etf_metrics
         self._cached_scores = scores
+        self._cache_date = context.now.date()
+        self._cached_filtered = None
 
-    def get_rankings(self, context):
-        """返回缓存的排名详情列表（用于日志打印）"""
-        if self._cache_date != context.now.date():
-            self._refresh_cache(context)
-            self._cache_date = context.now.date()
-        return self._cached_metrics
+        top_n = min(5, len(etf_metrics))
+        if top_n > 0:
+            PlatformAdapter.log_info(f"=== ETF排名前{top_n} ===")
+            for i, m in enumerate(etf_metrics[:top_n]):
+                PlatformAdapter.log_info(
+                    f"排名{i+1}: {m['etf']} {m['etf_name']} "
+                    f"得分{m['score']:.4f} 年化{m['annualized_returns']*100:.2f}% "
+                    f"R²={m['r_squared']:.4f}"
+                )
+
+    def _ensure_filtered(self, context):
+        """确保已过滤：对缓存排名应用全部过滤器（每天一次）"""
+        if self._cached_filtered is not None:
+            return
+        ranked = list(self._cached_rankings)
+        scores = dict(self._cached_scores)
+        for f in self.filters:
+            if not f.enabled:
+                continue
+            before = list(ranked)
+            ranked = f.filter(context, ranked, scores)
+            if before != ranked:
+                removed = [e for e in before if e not in ranked]
+                if removed:
+                    PlatformAdapter.log_debug(f"过滤器[{f.name}] 移除了: {removed}")
+        self._cached_filtered = ranked
 
 
 # ============================================================
@@ -622,19 +626,6 @@ def buy_trade(context, bar_dict=None):
     PlatformAdapter.log_info("========== 买入操作开始 ==========")
 
     engine = context.engine
-    params = context.params
-
-    # 打印排名前5
-    rankings = engine.get_rankings(context)
-    top_n = min(5, len(rankings))
-    if top_n > 0:
-        PlatformAdapter.log_info(f"=== ETF排名前{top_n} ===")
-        for i, m in enumerate(rankings[:top_n]):
-            PlatformAdapter.log_info(
-                f"排名{i+1}: {m['etf']} {m['etf_name']} "
-                f"得分{m['score']:.4f} 年化{m['annualized_returns']*100:.2f}% "
-                f"R²={m['r_squared']:.4f}"
-            )
 
     candidates = engine.select(context)
     if not candidates:
@@ -697,7 +688,7 @@ DEFAULT_PARAMS = {
         'enabled': True,
     },
     'filter_profit_protection': {
-        'enabled': True, 'lookback': 1, 'threshold': 0.05,
+        'enabled': True, 'lookback': 2, 'threshold': 0.05,
     },
     'filter_volume': {
         'enabled': True, 'lookback': 5, 'threshold': 2, 'return_limit': 1.0,
