@@ -10,6 +10,7 @@
     my_strategy/strategies/batch_results/七星高照/
 """
 
+import json
 import os
 import pandas as pd
 from pathlib import Path
@@ -21,25 +22,36 @@ from rqalpha import run_file
 
 # ==================== 基础配置 ====================
 STRATEGY_FILE = os.path.join(project_root, 'my_strategy/strategies/七星ETF轮动/七星高照_strategy.py')
-RESULT_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results' / '七星高照'
-RESULT_DIR.mkdir(exist_ok=True, parents=True)
+BASE_RESULT_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results' / '七星高照'
+BASE_RESULT_DIR.mkdir(exist_ok=True, parents=True)
+
+SWEEP_META = None  # 由下方实验组定义覆盖
+
+
+def get_output_dir():
+    """根据 SWEEP_META 决定输出子目录"""
+    if SWEEP_META is None:
+        return BASE_RESULT_DIR / "single"
+    return BASE_RESULT_DIR / SWEEP_META["name"]
 
 
 def make_base_config(tag: str):
     """生成一份基础 config，output_file 按 tag 区分"""
+    output_dir = get_output_dir()
+    output_dir.mkdir(exist_ok=True, parents=True)
     return {
         "base": {
             "strategy_file": STRATEGY_FILE,
             "data_bundle_path": r"D:\datas\bundle",
-            "start_date": "2026-01-01",
-            "end_date":   "2026-02-01",
+            "start_date": "2023-01-01",
+            "end_date":   "2024-12-31",
             "frequency":  "1d",
             "accounts":   {"stock": 20000},
         },
         "mod": {
             "sys_transaction_cost": {
                 "enabled": True,
-                "stock_commission_multiplier": 0.25,   # 万2（base=万8 × 0.25）
+                "stock_commission_multiplier": 0.25,
                 "stock_min_commission": 5,
                 "tax_multiplier": 0,
             },
@@ -52,7 +64,7 @@ def make_base_config(tag: str):
                 "enabled": True,
                 "plot": False,
                 "benchmark": "510300.XSHG",
-                "output_file": str(RESULT_DIR / f"{tag}.pkl"),
+                "output_file": str(output_dir / f"{tag}.pkl"),
             },
         },
         "extra": {
@@ -64,13 +76,19 @@ def make_base_config(tag: str):
 
 
 # ==================== 实验组定义 ====================
+# 使用说明:
+#   1. 取消注释一组 EXPERIMENTS
+#   2. 取消注释对应的 SWEEP_META
+#   3. 修改上方 start_date / end_date
+#   4. 运行 python run_七星高照.py
 
-# ---- 模式A: 基线单次回测（默认参数）----
+# ---- 模式A: 基线单次回测(默认参数) ----
 EXPERIMENTS = [
     ("baseline", {}),
 ]
+SWEEP_META = None
 
-# ---- 模式B: ETF池扫描（小池 vs 大池）----
+# ---- 模式B: ETF池大小对比 ----
 # EXPERIMENTS = [
 #     ("small_pool", {}),
 #     ("large_pool", {"etf_pool": [
@@ -86,66 +104,126 @@ EXPERIMENTS = [
 #         "511010.XSHG", "511220.XSHG",
 #     ]}),
 # ]
+# SWEEP_META = None
 
-# ---- 模式C: 动量周期扫描 ----
+# ---- 模式C: 动量周期 m_days 扫描 ----
 # EXPERIMENTS = [
 #     ("baseline", {}),
 # ] + [
-#     (f"lookback{d:02d}", {"scorer": {"m_days": d}})
+#     (f"m{d:02d}", {"scorer": {"m_days": d}})
 #     for d in [15, 20, 30, 35, 40]
 # ]
+# SWEEP_META = {
+#     "name": "m_days",
+#     "dimensions": [{"name": "m_days", "display": "动量周期(天)"}],
+#     "tag_values": {"baseline": [25], "m15": [15], "m20": [20],
+#                    "m30": [30], "m35": [35], "m40": [40]}
+# }
 
-# ---- 模式D: 持仓数扫描 ----
+# ---- 模式D: 持仓数 holdings_num 扫描 ----
 # EXPERIMENTS = [
-#     (f"hold{n}", {"holdings_num": n})
+#     (f"h{n}", {"holdings_num": n})
 #     for n in [1, 2, 3]
 # ]
+# SWEEP_META = {
+#     "name": "holdings_num",
+#     "dimensions": [{"name": "holdings_num", "display": "持仓数"}],
+#     "tag_values": {"h1": [1], "h2": [2], "h3": [3]}
+# }
 
 # ---- 模式E: 盈利保护阈值扫描 ----
 # EXPERIMENTS = [
 #     ("baseline", {}),
 # ] + [
-#     (f"prot{t*100:03.0f}", {"filter_profit_protection": {"threshold": t}})
-#     for t in [0.03, 0.05, 0.07, 0.10]
+#     (f"pp{t*100:03.0f}", {"filter_profit_protection": {"threshold": t}})
+#     for t in [0.03, 0.07, 0.10]
 # ]
+# SWEEP_META = {
+#     "name": "profit_protection",
+#     "dimensions": [{"name": "threshold", "display": "盈利保护阈值"}],
+#     "tag_values": {"baseline": [0.05], "pp003": [0.03], "pp007": [0.07], "pp010": [0.10]}
+# }
 
 # ---- 模式F: 短期动量阈值扫描 ----
 # EXPERIMENTS = [
 #     ("baseline", {}),
 # ] + [
-#     (f"short{t*100:03.0f}", {"filter_short_momentum": {"threshold": t}})
-#     for t in [-0.1, -0.05, 0.0, 0.05, 0.1]
+#     (f"sm_neg{abs(t)*100:02.0f}" if t < 0 else f"sm_{t*100:02.0f}",
+#      {"filter_short_momentum": {"threshold": t}})
+#     for t in [-0.10, -0.05, 0.0, 0.05, 0.10]
 # ]
+# SWEEP_META = {
+#     "name": "short_momentum",
+#     "dimensions": [{"name": "threshold", "display": "短期动量阈值"}],
+#     "tag_values": {"baseline": [0.0], "sm_neg10": [-0.10], "sm_neg05": [-0.05],
+#                    "sm_00": [0.0], "sm_05": [0.05], "sm_10": [0.10]}
+# }
 
-# ---- 模式G: 过滤开关对比 ----
+# ---- 模式G: 过滤器开关对比 ----
 # EXPERIMENTS = [
 #     ("all_on", {}),
-#     ("no_volume", {"filter_volume": {"enabled": False}}),
-#     ("no_short", {"filter_short_momentum": {"enabled": False}}),
-#     ("no_profit", {"filter_profit_protection": {"enabled": False}}),
+#     ("no_vol", {"filter_volume": {"enabled": False}}),
+#     ("no_sm", {"filter_short_momentum": {"enabled": False}}),
+#     ("no_pp", {"filter_profit_protection": {"enabled": False}}),
 #     ("all_off", {
 #         "filter_volume": {"enabled": False},
 #         "filter_short_momentum": {"enabled": False},
 #         "filter_profit_protection": {"enabled": False},
 #     }),
 # ]
+# SWEEP_META = {
+#     "name": "filter_ablation",
+#     "dimensions": [{"name": "variant", "display": "过滤器组合"}],
+#     "tag_values": {"all_on": ["全部开启"], "no_vol": ["关成交量"],
+#                    "no_sm": ["关短期动量"], "no_pp": ["关盈利保护"],
+#                    "all_off": ["全关"]}
+# }
 
-
-# ---- 模式H: decay_weight扫描 ----
+# ---- 模式H: 衰减权重 decay_weight 扫描 ----
 # EXPERIMENTS = [
 #     ("baseline", {}),
 # ] + [
-#     (f"decay{d*10:03.0f}", {"scorer": {"decay_weight": d}})
-#     for d in [1.0, 1.5, 2.0, 2.5, 3.0]
+#     (f"dw{d*10:02.0f}", {"scorer": {"decay_weight": d}})
+#     for d in [1.0, 1.5, 2.5, 3.0]
 # ]
+# SWEEP_META = {
+#     "name": "decay_weight",
+#     "dimensions": [{"name": "decay_weight", "display": "衰减权重"}],
+#     "tag_values": {"baseline": [2.0], "dw10": [1.0], "dw15": [1.5],
+#                    "dw25": [2.5], "dw30": [3.0]}
+# }
 
 # ---- 模式I: 成交量阈值扫描 ----
 # EXPERIMENTS = [
 #     ("baseline", {}),
 # ] + [
-#     (f"vol{t*10:03.0f}", {"filter_volume": {"threshold": t}})
-#     for t in [1.5, 2.0, 2.5, 3.0]
+#     (f"vt{t*10:02.0f}", {"filter_volume": {"threshold": t}})
+#     for t in [1.5, 2.5, 3.0]
 # ]
+# SWEEP_META = {
+#     "name": "volume_threshold",
+#     "dimensions": [{"name": "threshold", "display": "成交量阈值"}],
+#     "tag_values": {"baseline": [2.0], "vt15": [1.5], "vt25": [2.5], "vt30": [3.0]}
+# }
+
+# ---- 模式J: 二维扫描 m_days x decay_weight ----
+# EXPERIMENTS = [
+#     (f"m{d:02d}_dw{w*10:02.0f}", {"scorer": {"m_days": d, "decay_weight": w}})
+#     for d in [15, 20, 25, 30, 35]
+#     for w in [1.0, 1.5, 2.0, 2.5, 3.0]
+# ]
+# SWEEP_META = {
+#     "name": "m_days_x_decay",
+#     "dimensions": [
+#         {"name": "m_days", "display": "动量周期(天)"},
+#         {"name": "decay_weight", "display": "衰减权重"}
+#     ],
+#     "tag_values": {
+#         f"m{d:02d}_dw{w*10:02.0f}": [d, w]
+#         for d in [15, 20, 25, 30, 35]
+#         for w in [1.0, 1.5, 2.0, 2.5, 3.0]
+#     }
+# }
 
 
 # ==================== 单次回测 ====================
@@ -178,6 +256,9 @@ def extract_metrics(tag: str, result: dict):
 
 # ==================== 主流程 ====================
 def main():
+    output_dir = get_output_dir()
+    print(f'输出目录: {output_dir}')
+
     metrics_list = []
     portfolios = {}
 
@@ -201,7 +282,7 @@ def main():
     print(df.to_string(index=False))
 
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    csv_path = RESULT_DIR / f'summary_{stamp}.csv'
+    csv_path = output_dir / f'summary_{stamp}.csv'
     df.to_csv(csv_path, index=False, encoding='utf-8-sig')
     print(f'\n汇总已保存: {csv_path}')
 
@@ -217,12 +298,19 @@ def main():
             plt.ylabel('Net Value')
             plt.legend()
             plt.grid(True, alpha=0.3)
-            png_path = RESULT_DIR / f'compare_{stamp}.png'
+            png_path = output_dir / f'compare_{stamp}.png'
             plt.savefig(png_path, dpi=120, bbox_inches='tight')
             plt.close()
             print(f'净值对比图: {png_path}')
         except Exception as e:
             print(f'绘图失败: {e}')
+
+    # --- 写 meta.json ---
+    if SWEEP_META:
+        meta_path = output_dir / "meta.json"
+        with open(meta_path, 'w', encoding='utf-8') as f:
+            json.dump(SWEEP_META, f, ensure_ascii=False, indent=2)
+        print(f'\n参数元信息: {meta_path}')
 
     return df
 
