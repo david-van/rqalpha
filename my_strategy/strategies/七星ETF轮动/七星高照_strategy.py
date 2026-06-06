@@ -191,8 +191,8 @@ class BaseFilter(ABC):
         self.params = kw
 
     @abstractmethod
-    def filter(self, context, ranked_list, scores) -> list:
-        """返回过滤后的 ETF 列表"""
+    def filter(self, context, ranked_list, scores) -> tuple:
+        """返回 (保留列表, {被移除代码: 排除原因})"""
 
 
 class ProfitProtectionFilter(BaseFilter):
@@ -205,37 +205,33 @@ class ProfitProtectionFilter(BaseFilter):
         self.threshold = threshold
 
     def check(self, code, context):
-        """检查单只ETF是否触发盈利保护"""
+        """检查单只ETF是否触发盈利保护，返回 (是否触发, 原因或None)"""
         high = PlatformAdapter.get_bars(code, self.lookback, 'high')
         if high is None or len(high) < self.lookback:
-            PlatformAdapter.log_debug(
-                f"{code} {PlatformAdapter.get_name(code)} 历史数据不足{self.lookback}天，无法检查盈利保护"
-            )
-            return False
+            return False, None
         max_high = float(high.max())
         current_price = PlatformAdapter.get_current_price(code)
         if current_price <= max_high * (1 - self.threshold):
             pullback = (1 - current_price / max_high) * 100
-            PlatformAdapter.log_info(
-                f"🔻 {code} {PlatformAdapter.get_name(code)} 触发盈利保护："
-                f"当前价{current_price:.3f}，最近{self.lookback}日最高{max_high:.3f}，"
+            reason = (
+                f"当前价{current_price:.3f}，近{self.lookback}日最高{max_high:.3f}，"
                 f"回撤{pullback:.2f}% > {self.threshold*100:.0f}%"
             )
-            return True
-        return False
+            return True, reason
+        return False, None
 
     def filter(self, context, ranked_list, scores):
         if not self.enabled:
-            return ranked_list
+            return ranked_list, {}
         result = []
+        removed = {}
         for etf in ranked_list:
-            if self.check(etf, context):
-                PlatformAdapter.log_info(
-                    f"🚫 {etf} {PlatformAdapter.get_name(etf)} 触发盈利保护，从排名中排除"
-                )
+            triggered, reason = self.check(etf, context)
+            if triggered:
+                removed[etf] = reason
             else:
                 result.append(etf)
-        return result
+        return result, removed
 
 
 class VolumeFilter(BaseFilter):
@@ -250,8 +246,9 @@ class VolumeFilter(BaseFilter):
 
     def filter(self, context, ranked_list, scores):
         if not self.enabled:
-            return ranked_list
+            return ranked_list, {}
         result = []
+        removed = {}
         for etf in ranked_list:
             try:
                 vols = PlatformAdapter.get_bars(etf, self.lookback + 1, 'volume')
@@ -265,22 +262,17 @@ class VolumeFilter(BaseFilter):
                     continue
                 ratio = today_vol / avg_vol
                 if ratio > self.threshold:
-                    PlatformAdapter.log_debug(
-                        f"{etf} {PlatformAdapter.get_name(etf)} 成交量比{ratio:.2f} > {self.threshold}"
-                    )
-                    # 需要年化收益判断是否排除
                     ann = self._get_annualized(context, etf)
                     if ann is not None and ann > self.return_limit:
-                        PlatformAdapter.log_info(
-                            f"📉 {etf} {PlatformAdapter.get_name(etf)} 成交量放量{ratio:.1f}倍，"
-                            f"且年化{ann*100:.1f}% > 阈值{self.return_limit*100:.1f}%，过滤"
+                        removed[etf] = (
+                            f"成交量放量{ratio:.1f}倍，年化{ann*100:.1f}% > {self.return_limit*100:.1f}%"
                         )
                         continue
                 result.append(etf)
             except Exception as e:
                 PlatformAdapter.log_warn(f"成交量计算失败 {etf}: {e}")
                 result.append(etf)
-        return result
+        return result, removed
 
     def _get_annualized(self, context, etf):
         """从 scorer 缓存或独立计算年化收益率"""
@@ -301,10 +293,10 @@ class ShortMomentumFilter(BaseFilter):
 
     def filter(self, context, ranked_list, scores):
         if not self.enabled:
-            return ranked_list
+            return ranked_list, {}
         result = []
+        removed = {}
         for etf in ranked_list:
-            name = PlatformAdapter.get_name(etf)
             cache = getattr(context, '_scorer_cache', {})
             entry = cache.get(etf, {})
             price_series = entry.get('price_series')
@@ -316,13 +308,12 @@ class ShortMomentumFilter(BaseFilter):
                 short_annualized = 0.0
 
             if short_annualized < self.threshold:
-                PlatformAdapter.log_debug(
-                    f"{etf} {name} 短期动量{short_annualized*100:.1f}% "
-                    f"< 阈值{self.threshold*100:.1f}%，过滤"
+                removed[etf] = (
+                    f"短期动量{short_annualized*100:.1f}% < {self.threshold*100:.1f}%"
                 )
             else:
                 result.append(etf)
-        return result
+        return result, removed
 
 
 class SingleDayLossFilter(BaseFilter):
@@ -335,8 +326,9 @@ class SingleDayLossFilter(BaseFilter):
 
     def filter(self, context, ranked_list, scores):
         if not self.enabled:
-            return ranked_list
+            return ranked_list, {}
         result = []
+        removed = {}
         for etf in ranked_list:
             cache = getattr(context, '_scorer_cache', {})
             entry = cache.get(etf, {})
@@ -346,13 +338,12 @@ class SingleDayLossFilter(BaseFilter):
                 day2 = price_series[-2] / price_series[-3]
                 day3 = price_series[-3] / price_series[-4]
                 if min(day1, day2, day3) < self.threshold:
-                    PlatformAdapter.log_info(
-                        f"⚠️ {etf} {PlatformAdapter.get_name(etf)} "
+                    removed[etf] = (
                         f"近3日有单日跌幅超{(1 - self.threshold)*100:.1f}%，直接排除"
                     )
                     continue
             result.append(etf)
-        return result
+        return result, removed
 
 
 class ListingFilter(BaseFilter):
@@ -361,18 +352,19 @@ class ListingFilter(BaseFilter):
 
     def filter(self, context, ranked_list, scores):
         if not self.enabled:
-            return ranked_list
+            return ranked_list, {}
         result = []
+        removed = {}
         for etf in ranked_list:
             try:
                 if context.now.date() < PlatformAdapter.get_instrument(etf).listed_date.date():
-                    PlatformAdapter.log_debug(f"{etf} {PlatformAdapter.get_name(etf)} 未上市，跳过")
+                    removed[etf] = "未上市"
                     continue
             except Exception:
                 PlatformAdapter.log_warn(f"未上市过滤 {etf}")
                 continue
             result.append(etf)
-        return result
+        return result, removed
 
 
 class SuspensionFilter(BaseFilter):
@@ -381,14 +373,15 @@ class SuspensionFilter(BaseFilter):
 
     def filter(self, context, ranked_list, scores):
         if not self.enabled:
-            return ranked_list
+            return ranked_list, {}
         result = []
+        removed = {}
         for etf in ranked_list:
             if PlatformAdapter.check_suspended(etf):
-                PlatformAdapter.log_debug(f"{etf} {PlatformAdapter.get_name(etf)} 停牌，跳过")
+                removed[etf] = "停牌"
             else:
                 result.append(etf)
-        return result
+        return result, removed
 
 
 class ScoreRangeFilter(BaseFilter):
@@ -402,18 +395,16 @@ class ScoreRangeFilter(BaseFilter):
 
     def filter(self, context, ranked_list, scores):
         if not self.enabled:
-            return ranked_list
+            return ranked_list, {}
         result = []
+        removed = {}
         for etf in ranked_list:
             s = scores.get(etf, float('-inf'))
             if self.min_score < s < self.max_score:
                 result.append(etf)
             else:
-                PlatformAdapter.log_debug(
-                    f"{etf} {PlatformAdapter.get_name(etf)} "
-                    f"得分{s:.2f}超出阈值，过滤"
-                )
-        return result
+                removed[etf] = f"得分{s:.2f}，不在({self.min_score:.2f}, {self.max_score:.2f})区间"
+        return result, removed
 
 
 class PremiumFilter(BaseFilter):
@@ -442,19 +433,17 @@ class PremiumFilter(BaseFilter):
 
     def filter(self, context, ranked_list, scores):
         if not self.enabled:
-            return ranked_list
+            return ranked_list, {}
         result = []
+        removed = {}
         prev_date = PlatformAdapter.prev_trading_date(context.now)
         for etf in ranked_list:
             premium, _, _ = self.get_premium_rate(etf, prev_date)
             if premium is not None and premium > self.threshold:
-                PlatformAdapter.log_info(
-                    f"🚫 {etf} {PlatformAdapter.get_name(etf)} "
-                    f"溢价率{premium*100:.2f}% > {self.threshold*100:.0f}%，跳过"
-                )
+                removed[etf] = f"溢价率{premium*100:.2f}% > {self.threshold*100:.0f}%"
             else:
                 result.append(etf)
-        return result
+        return result, removed
 
 
 # ============================================================
@@ -565,9 +554,9 @@ class StrategyEngine:
         self._cache_date = context.now.date()
         self._cached_filtered = None
 
-        top_n = min(5, len(etf_metrics))
+        top_n = len(etf_metrics)
         if top_n > 0:
-            PlatformAdapter.log_info(f"=== ETF排名前{top_n} ===")
+            PlatformAdapter.log_info(f"=== 共 {len(etf_metrics)} 只 ETF,排名如下: ===")
             for i, m in enumerate(etf_metrics[:top_n]):
                 PlatformAdapter.log_info(
                     f"排名{i+1}: {m['etf']} {m['etf_name']} "
@@ -576,21 +565,35 @@ class StrategyEngine:
                 )
 
     def _ensure_filtered(self, context):
-        """确保已过滤：对缓存排名应用全部过滤器（每天一次）"""
+        """确保已过滤：对缓存排名应用全部过滤器，输出统一报告"""
         if self._cached_filtered is not None:
             return
         ranked = list(self._cached_rankings)
         scores = dict(self._cached_scores)
+        all_removed = {}  # code -> (filter_name, reason)
+
         for f in self.filters:
             if not f.enabled:
                 continue
-            before = list(ranked)
-            ranked = f.filter(context, ranked, scores)
-            if before != ranked:
-                removed = [e for e in before if e not in ranked]
-                if removed:
-                    PlatformAdapter.log_debug(f"过滤器[{f.name}] 移除了: {removed}")
+            ranked, removed = f.filter(context, ranked, scores)
+            for code, reason in removed.items():
+                all_removed[code] = (f.name, reason)
+
         self._cached_filtered = ranked
+
+        PlatformAdapter.log_info("=== 过滤报告 ===")
+        passed = [f"{e} {PlatformAdapter.get_name(e)}" for e in ranked]
+        PlatformAdapter.log_info(
+            f"✅ 通过 ({len(ranked)}只): {' | '.join(passed) if passed else '(无)'}"
+        )
+        if all_removed:
+            PlatformAdapter.log_info(f"❌ 排除 ({len(all_removed)}只):")
+            for code in self._cached_rankings:
+                if code in all_removed:
+                    fname, reason = all_removed[code]
+                    PlatformAdapter.log_info(
+                        f"    {code} {PlatformAdapter.get_name(code)} [{fname}] {reason}"
+                    )
 
 
 # ============================================================
