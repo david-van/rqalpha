@@ -38,7 +38,7 @@ BASE_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results' /
 
 # 修改此处指定要分析的扫描，设为 None 则列出所有可用扫描
 # 命令行 --sweep 参数优先级高于此处
-DEFAULT_SWEEP = "m_days"
+DEFAULT_SWEEP = "single"
 
 # Bundle 日线数据路径
 BUNDLE_PATH = Path("D:/datas/bundle/stocks.h5")
@@ -610,6 +610,111 @@ def build_grid_heatmap_figure(results: dict, meta: dict) -> go.Figure | None:
     fig.update_yaxes(title_text=dim0_name, row=1, col=1)
     fig.update_yaxes(title_text=dim0_name, row=1, col=2)
     fig.update_yaxes(title_text=dim0_name, row=1, col=3)
+
+    return fig
+
+
+# ============================================================
+# Tab 3B: 过滤器分年贡献图（filter_ablation 专用）
+# ============================================================
+def build_filter_contribution_figure(results: dict, meta: dict) -> go.Figure | None:
+    """过滤器开关对比：每年每个变体的收益 + 各过滤器相对 all_on 的贡献"""
+    if not meta or meta.get("name") != "filter_ablation":
+        return None
+
+    # 提取每年收益
+    yearly_data = {}  # {variant: {year: return}}
+    years_set = set()
+    for tag, data in results.items():
+        pf = data["portfolio"]
+        if pf.empty or "unit_net_value" not in pf.columns:
+            continue
+        nv = pf["unit_net_value"].copy()
+        if not isinstance(nv.index, pd.DatetimeIndex):
+            nv.index = pd.to_datetime(nv.index)
+        yearly = {}
+        for year in sorted(set(nv.index.year)):
+            nv_y = nv[nv.index.year == year]
+            if len(nv_y) >= 2:
+                yearly[year] = nv_y.iloc[-1] / nv_y.iloc[0] - 1
+                years_set.add(year)
+        yearly_data[tag] = yearly
+
+    if not yearly_data or len(yearly_data) < 2:
+        return None
+
+    years = sorted(years_set)
+    tags = list(yearly_data.keys())
+
+    # 饼图需要 all_on 作为基线
+    if "all_on" not in yearly_data:
+        return None
+    baseline = yearly_data["all_on"]
+
+    # 提取各过滤器变体（除了 all_on 和 all_off）
+    filter_variants = [t for t in tags if t not in ("all_on", "all_off")]
+
+    # ---- 图1: 分年收益对比柱状图 ----
+    display_names = meta.get("tag_values", {})
+    tag_labels = {t: display_names.get(t, [t])[0] if isinstance(display_names.get(t, []), list) and len(display_names.get(t, [])) > 0 else t for t in tags}
+
+    fig = make_subplots(
+        rows=2, cols=1,
+        subplot_titles=("各过滤器变体分年收益", "过滤器贡献 (all_on 收益 - 关某过滤器收益)"),
+        vertical_spacing=0.15,
+    )
+
+    colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2"]
+
+    # 图1: 分组柱状图
+    for i, tag in enumerate(tags):
+        y_vals = [yearly_data[tag].get(y, 0) for y in years]
+        fig.add_trace(
+            go.Bar(
+                name=tag_labels.get(tag, tag),
+                x=[str(y) for y in years],
+                y=y_vals,
+                text=[f"{v:.1%}" for v in y_vals],
+                textposition="outside",
+                textfont=dict(size=9),
+                marker_color=colors[i % len(colors)],
+                hovertemplate=f"{tag_labels.get(tag, tag)}: %{{y:.2%}}<extra></extra>",
+            ),
+            row=1, col=1,
+        )
+
+    # 图2: 过滤器贡献 (= all_on_return - no_filter_return)
+    for i, tag in enumerate(filter_variants):
+        contributions = []
+        for y in years:
+            base_r = baseline.get(y, 0)
+            var_r = yearly_data[tag].get(y, 0)
+            contributions.append(base_r - var_r)
+        fig.add_trace(
+            go.Waterfall(
+                name=tag_labels.get(tag, tag),
+                x=[str(y) for y in years],
+                y=contributions,
+                text=[f"{v:+.1%}" for v in contributions],
+                textposition="outside",
+                textfont=dict(size=9),
+                hovertemplate=f"{tag_labels.get(tag, tag)}<br>贡献: %{{y:+.2%}}<extra></extra>",
+                increasing=dict(marker_color=colors[(i + 1) % len(colors)]),
+                decreasing=dict(marker_color=colors[(i + 2) % len(colors)]),
+            ),
+            row=2, col=1,
+        )
+
+    fig.update_layout(
+        title=dict(text="过滤器开关对比 — 分年分析", font=dict(size=18)),
+        autosize=True,
+        height=800,
+        barmode="group",
+        hovermode="closest",
+        legend=dict(font=dict(size=9), orientation="h", yanchor="top", y=-0.08),
+    )
+    fig.update_yaxes(title_text="年收益", tickformat=".0%", row=1, col=1)
+    fig.update_yaxes(title_text="贡献 (正=过滤器有帮助)", tickformat=".0%", row=2, col=1)
 
     return fig
 
@@ -1532,6 +1637,7 @@ def build_dashboard_html(results: dict, output_path: Path, meta: dict = None) ->
     curves_fig = build_curves_figure(results)
     sensitivity_fig = build_sensitivity_figure(results, meta) if meta else None
     grid_heatmap_fig = build_grid_heatmap_figure(results, meta) if meta else None
+    filter_ablation_fig = build_filter_contribution_figure(results, meta) if meta else None
     trades_fig = build_trades_figure(results)
     yearly_fig = build_yearly_figure(results)
     risk_return_fig = build_risk_return_figure(results)
@@ -1588,6 +1694,8 @@ def build_dashboard_html(results: dict, output_path: Path, meta: dict = None) ->
         sens_specs.append(("sens_main", sensitivity_fig))
     if grid_heatmap_fig is not None:
         sens_specs.append(("grid_main", grid_heatmap_fig))
+    if filter_ablation_fig is not None:
+        sens_specs.append(("filter_ab_main", filter_ablation_fig))
     tab_figures["sensitivity"] = sens_specs
 
     tab_figures["trades"] = [("tr_main", trades_fig)]
@@ -1668,12 +1776,16 @@ def build_dashboard_html(results: dict, output_path: Path, meta: dict = None) ->
     curves_content = _make_plot_container("cv_main")
 
     sensitivity_content = ""
-    if sensitivity_fig is not None:
+    if filter_ablation_fig is not None:
+        sensitivity_content += _make_plot_container("filter_ab_main")
+    elif sensitivity_fig is not None:
         sensitivity_content += _make_plot_container("sens_main")
+        if grid_heatmap_fig is not None:
+            sensitivity_content += _make_plot_container("grid_main")
+    elif grid_heatmap_fig is not None:
+        sensitivity_content += _make_plot_container("grid_main")
     else:
         sensitivity_content += "<p class='no-data'>至少需要 2 个单维度实验才能展示参数敏感性</p>"
-    if grid_heatmap_fig is not None:
-        sensitivity_content += _make_plot_container("grid_main")
 
     trades_content = _make_plot_container("tr_main")
 

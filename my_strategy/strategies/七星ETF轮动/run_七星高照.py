@@ -43,7 +43,7 @@ def make_base_config(tag: str):
         "base": {
             "strategy_file": STRATEGY_FILE,
             "data_bundle_path": r"D:\datas\bundle",
-            "start_date": "2019-01-01",
+            "start_date": "2020-01-01",
             "end_date":   "2025-12-31",
             "frequency":  "1d",
             "accounts":   {"stock": 20000},
@@ -145,21 +145,26 @@ SWEEP_META = None
 
 # ---- 模式G: 过滤器开关对比 ----
 # EXPERIMENTS = [
-#     ("all_on", {}),
-#     ("no_vol", {"filter_volume": {"enabled": False}}),
-#     ("no_sm", {"filter_short_momentum": {"enabled": False}}),
-#     ("no_pp", {"filter_profit_protection": {"enabled": False}}),
-#     ("all_off", {
-#         "filter_volume": {"enabled": False},
-#         "filter_short_momentum": {"enabled": False},
-#         "filter_profit_protection": {"enabled": False},
-#     }),
+    ("all_on", {}),
+    ("no_pp", {"filter_profit_protection": {"enabled": False}}),
+    ("no_vol", {"filter_volume": {"enabled": False}}),
+    ("no_sm", {"filter_short_momentum": {"enabled": False}}),
+    ("no_sdl", {"filter_single_day_loss": {"enabled": False}}),
+    ("no_sr", {"filter_score_range": {"enabled": False}}),
+    ("all_off", {
+        "filter_profit_protection": {"enabled": False},
+        "filter_volume": {"enabled": False},
+        "filter_short_momentum": {"enabled": False},
+        "filter_single_day_loss": {"enabled": False},
+        "filter_score_range": {"enabled": False},
+    }),
 # ]
 # SWEEP_META = {
 #     "name": "filter_ablation",
-#     "dimensions": [{"name": "variant", "display": "过滤器组合"}],
-#     "tag_values": {"all_on": ["全部开启"], "no_vol": ["关成交量"],
-#                    "no_sm": ["关短期动量"], "no_pp": ["关盈利保护"],
+    "dimensions": [{"name": "variant", "display": "过滤器组合"}],
+    "tag_values": {"all_on": ["全部开启"], "no_pp": ["关盈利保护"],
+                   "no_vol": ["关成交量"], "no_sm": ["关短期动量"],
+#                    "no_sdl": ["关单日跌幅"], "no_sr": ["关得分范围"],
 #                    "all_off": ["全关"]}
 # }
 
