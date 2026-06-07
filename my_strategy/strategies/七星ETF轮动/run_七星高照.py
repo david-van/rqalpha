@@ -10,12 +10,14 @@
     my_strategy/strategies/batch_results/七星高照/
 """
 
+import argparse
 import json
 import os
-import pandas as pd
-from pathlib import Path
 from datetime import datetime
 from itertools import combinations
+from pathlib import Path
+
+import pandas as pd
 
 from my_strategy.common_file import project_root
 from rqalpha import run_file
@@ -26,7 +28,31 @@ STRATEGY_FILE = os.path.join(project_root, 'my_strategy/strategies/七星ETF轮�
 BASE_RESULT_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results' / '七星高照'
 BASE_RESULT_DIR.mkdir(exist_ok=True, parents=True)
 
-SWEEP_META = None  # 由下方实验组定义覆盖
+# 默认实验选择；直接运行本脚本时生效，命令行 --sweep / --layer 会覆盖这里。
+#
+# 常用实验组:
+#   "filter_layer"              过滤器分层组合分析，需要 ACTIVE_SWEEP_ARGS = {"layer": "1"/"2"/"3"/"4_5"}
+#   "score_only_m_days"         核心过滤器全关，只扫描动量周期 m_days
+#   "score_only_decay_weight"   核心过滤器全关，只扫描回归衰减权重 decay_weight
+#   "sdl_threshold"             核心过滤器全关，只开启单日跌幅过滤并扫描 threshold
+#
+# 其他可用实验组:
+#   "baseline", "m_days", "holdings_num", "profit_protection", "short_momentum",
+#   "filter_ablation", "decay_weight", "volume_threshold", "m_days_x_decay",
+#   "only_sdl_m_days", "only_sdl_decay_weight", "only_sdl_threshold"
+#
+# 示例:
+#   ACTIVE_SWEEP = "score_only_m_days"
+#   ACTIVE_SWEEP_ARGS = {}
+#   ACTIVE_SWEEP = "filter_layer"
+#   ACTIVE_SWEEP_ARGS = {"layer": "4_5"}
+ACTIVE_SWEEP = "score_only_m_days"
+ACTIVE_SWEEP_ARGS = {}
+
+# 运行时状态，由 resolve_sweep() 根据 ACTIVE_SWEEP / 命令行参数生成。
+# 不需要手动修改这两个变量；想切换实验只改 ACTIVE_SWEEP / ACTIVE_SWEEP_ARGS。
+SWEEP_META = None       # 当前实验组的元信息，用于决定输出目录和写 meta.json
+EXPERIMENTS = []        # 当前实验组要执行的组合列表，格式为 [(tag, 参数覆盖字典), ...]
 
 
 def get_output_dir():
@@ -77,74 +103,11 @@ def make_base_config(tag: str):
 
 
 # ==================== 实验组定义 ====================
-# 使用说明:
-#   1. 取消注释一组 EXPERIMENTS
-#   2. 取消注释对应的 SWEEP_META
-#   3. 修改上方 start_date / end_date
-#   4. 运行 python run_七星高照.py
+# 使用方式:
+#   1. 修改文件顶部 ACTIVE_SWEEP / ACTIVE_SWEEP_ARGS
+#   2. 或运行时用 --sweep / --layer 覆盖
+#   3. 先用 --dry-run 确认组合，再正式运行
 
-# ---- 模式A: 基线单次回测(默认参数) ----
-EXPERIMENTS = [
-    ("baseline", {}),
-]
-SWEEP_META = None
-
-
-
-# ---- 模式C: 动量周期 m_days 扫描 ----
-# EXPERIMENTS = [
-#     ("baseline", {}),
-# ] + [
-#     (f"m{d:02d}", {"scorer": {"m_days": d}})
-#     for d in [15, 20, 30, 35, 40]
-# ]
-# SWEEP_META = {
-#     "name": "m_days",
-#     "dimensions": [{"name": "m_days", "display": "动量周期(天)"}],
-#     "tag_values": {"baseline": [25], "m15": [15], "m20": [20],
-#                    "m30": [30], "m35": [35], "m40": [40]}
-# }
-
-# ---- 模式D: 持仓数 holdings_num 扫描 ----
-# EXPERIMENTS = [
-#     (f"h{n}", {"holdings_num": n})
-#     for n in [1, 2, 3]
-# ]
-# SWEEP_META = {
-#     "name": "holdings_num",
-#     "dimensions": [{"name": "holdings_num", "display": "持仓数"}],
-#     "tag_values": {"h1": [1], "h2": [2], "h3": [3]}
-# }
-
-# ---- 模式E: 盈利保护阈值扫描 ----
-# EXPERIMENTS = [
-#     ("baseline", {}),
-# ] + [
-#     (f"pp{t*100:03.0f}", {"filter_profit_protection": {"threshold": t}})
-#     for t in [0.03, 0.07, 0.10]
-# ]
-# SWEEP_META = {
-#     "name": "profit_protection",
-#     "dimensions": [{"name": "threshold", "display": "盈利保护阈值"}],
-#     "tag_values": {"baseline": [0.05], "pp003": [0.03], "pp007": [0.07], "pp010": [0.10]}
-# }
-
-# ---- 模式F: 短期动量阈值扫描 ----
-# EXPERIMENTS = [
-#     ("baseline", {}),
-# ] + [
-#     (f"sm_neg{abs(t)*100:02.0f}" if t < 0 else f"sm_{t*100:02.0f}",
-#      {"filter_short_momentum": {"threshold": t}})
-#     for t in [-0.10, -0.05, 0.0, 0.05, 0.10]
-# ]
-# SWEEP_META = {
-#     "name": "short_momentum",
-#     "dimensions": [{"name": "threshold", "display": "短期动量阈值"}],
-#     "tag_values": {"baseline": [0.0], "sm_neg10": [-0.10], "sm_neg05": [-0.05],
-#                    "sm_00": [0.0], "sm_05": [0.05], "sm_10": [0.10]}
-# }
-
-# ---- 模式G1: 过滤器关闭消融（从全开出发，逐个关闭）----
 CORE_FILTERS = {
     "pp": ("filter_profit_protection", "盈利保护"),
     "vol": ("filter_volume", "成交量"),
@@ -199,94 +162,413 @@ def build_filter_layer_experiments(layer):
     return experiments
 
 
-# EXPERIMENTS = [
-#     ("all_on", {}),
-#     ("no_pp", {"filter_profit_protection": {"enabled": False}}),
-#     ("no_vol", {"filter_volume": {"enabled": False}}),
-#     ("no_sm", {"filter_short_momentum": {"enabled": False}}),
-#     ("no_sdl", {"filter_single_day_loss": {"enabled": False}}),
-#     ("no_sr", {"filter_score_range": {"enabled": False}}),
-#     ("all_off", core_filter_params([])),
-# ]
-# SWEEP_META = {
-#     "name": "filter_ablation",
-#     "dimensions": [{"name": "variant", "display": "过滤器组合"}],
-#     "tag_order": ["all_on", "no_pp", "no_vol", "no_sm", "no_sdl", "no_sr", "all_off"],
-#     "tag_values": {"all_on": ["全部开启"], "no_pp": ["关盈利保护"],
-#                    "no_vol": ["关成交量"], "no_sm": ["关短期动量"],
-#                    "no_sdl": ["关单日跌幅"], "no_sr": ["关得分范围"],
-#                    "all_off": ["核心过滤器全关"]},
-# }
+def build_baseline_sweep():
+    return [("baseline", {})], None
 
-# ---- 模式G2: 过滤器分层分析（每次只跑一层，每层单独输出）----
-FILTER_LAYER = '4_5'  # 可选: 1、2、3、"4_5"
-LAYER_EXPERIMENTS = build_filter_layer_experiments(FILTER_LAYER)
-LAYER_NAME = f"filter_layer_{FILTER_LAYER}"
 
-EXPERIMENTS = [
-    (tag, core_filter_params(keys))
-    for tag, keys in LAYER_EXPERIMENTS
-]
-SWEEP_META = {
-    "name": LAYER_NAME,
-    "analysis_type": "filter_layer",
-    "dimensions": [{"name": "variant", "display": "过滤器组合"}],
-    "layer": FILTER_LAYER,
-    "baseline": "base_off",
-    "tag_order": [tag for tag, _ in LAYER_EXPERIMENTS],
-    "filter_sets": {tag: keys for tag, keys in LAYER_EXPERIMENTS},
-    "filter_labels": {key: label for key, (_, label) in CORE_FILTERS.items()},
-    "tag_values": {
-        tag: [filter_label(keys)]
-        for tag, keys in LAYER_EXPERIMENTS
-    },
+def build_m_days_sweep():
+    values = [15, 20, 30, 35, 40]
+    experiments = [("baseline", {})] + [
+        (f"m{d:02d}", {"scorer": {"m_days": d}})
+        for d in values
+    ]
+    meta = {
+        "name": "m_days",
+        "dimensions": [{"name": "m_days", "display": "动量周期(天)"}],
+        "tag_order": [tag for tag, _ in experiments],
+        "tag_values": {
+            "baseline": [25],
+            **{f"m{d:02d}": [d] for d in values},
+        },
+    }
+    return experiments, meta
+
+
+def build_holdings_num_sweep():
+    values = [1, 2, 3]
+    experiments = [
+        (f"h{n}", {"holdings_num": n})
+        for n in values
+    ]
+    meta = {
+        "name": "holdings_num",
+        "dimensions": [{"name": "holdings_num", "display": "持仓数"}],
+        "tag_order": [tag for tag, _ in experiments],
+        "tag_values": {f"h{n}": [n] for n in values},
+    }
+    return experiments, meta
+
+
+def build_profit_protection_sweep():
+    values = [0.03, 0.07, 0.10]
+    experiments = [("baseline", {})] + [
+        (f"pp{t * 100:03.0f}", {"filter_profit_protection": {"threshold": t}})
+        for t in values
+    ]
+    meta = {
+        "name": "profit_protection",
+        "dimensions": [{"name": "threshold", "display": "盈利保护阈值"}],
+        "tag_order": [tag for tag, _ in experiments],
+        "tag_values": {
+            "baseline": [0.05],
+            **{f"pp{t * 100:03.0f}": [t] for t in values},
+        },
+    }
+    return experiments, meta
+
+
+def build_short_momentum_sweep():
+    values = [-0.10, -0.05, 0.0, 0.05, 0.10]
+    experiments = [("baseline", {})] + [
+        (
+            f"sm_neg{abs(t) * 100:02.0f}" if t < 0 else f"sm_{t * 100:02.0f}",
+            {"filter_short_momentum": {"threshold": t}},
+        )
+        for t in values
+    ]
+    meta = {
+        "name": "short_momentum",
+        "dimensions": [{"name": "threshold", "display": "短期动量阈值"}],
+        "tag_order": [tag for tag, _ in experiments],
+        "tag_values": {
+            "baseline": [0.0],
+            **{
+                (f"sm_neg{abs(t) * 100:02.0f}" if t < 0 else f"sm_{t * 100:02.0f}"): [t]
+                for t in values
+            },
+        },
+    }
+    return experiments, meta
+
+
+def build_filter_ablation_sweep():
+    experiments = [
+        ("all_on", {}),
+        ("no_pp", {"filter_profit_protection": {"enabled": False}}),
+        ("no_vol", {"filter_volume": {"enabled": False}}),
+        ("no_sm", {"filter_short_momentum": {"enabled": False}}),
+        ("no_sdl", {"filter_single_day_loss": {"enabled": False}}),
+        ("no_sr", {"filter_score_range": {"enabled": False}}),
+        ("all_off", core_filter_params([])),
+    ]
+    meta = {
+        "name": "filter_ablation",
+        "dimensions": [{"name": "variant", "display": "过滤器组合"}],
+        "tag_order": [tag for tag, _ in experiments],
+        "tag_values": {
+            "all_on": ["全部开启"],
+            "no_pp": ["关盈利保护"],
+            "no_vol": ["关成交量"],
+            "no_sm": ["关短期动量"],
+            "no_sdl": ["关单日跌幅"],
+            "no_sr": ["关得分范围"],
+            "all_off": ["核心过滤器全关"],
+        },
+    }
+    return experiments, meta
+
+
+def build_filter_layer_sweep(layer="4_5"):
+    layer = str(layer)
+    layer_experiments = build_filter_layer_experiments(layer)
+    experiments = [
+        (tag, core_filter_params(keys))
+        for tag, keys in layer_experiments
+    ]
+    meta = {
+        "name": f"filter_layer_{layer}",
+        "analysis_type": "filter_layer",
+        "dimensions": [{"name": "variant", "display": "过滤器组合"}],
+        "layer": layer,
+        "baseline": "base_off",
+        "tag_order": [tag for tag, _ in layer_experiments],
+        "filter_sets": {tag: keys for tag, keys in layer_experiments},
+        "filter_labels": {key: label for key, (_, label) in CORE_FILTERS.items()},
+        "tag_values": {
+            tag: [filter_label(keys)]
+            for tag, keys in layer_experiments
+        },
+    }
+    return experiments, meta
+
+
+def merge_nested(base: dict, extra: dict | None = None) -> dict:
+    """递归合并参数字典，返回新对象。"""
+    merged = {}
+    for key, value in base.items():
+        merged[key] = value.copy() if isinstance(value, dict) else value
+    if not extra:
+        return merged
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            nested = merged[key].copy()
+            nested.update(value)
+            merged[key] = nested
+        else:
+            merged[key] = value
+    return merged
+
+
+def only_sdl_params(extra: dict | None = None) -> dict:
+    """只开启单日跌幅过滤，其余核心过滤器关闭。"""
+    params = {
+        "filter_profit_protection": {"enabled": False},
+        "filter_volume": {"enabled": False},
+        "filter_short_momentum": {"enabled": False},
+        "filter_single_day_loss": {"enabled": True, "threshold": 0.97},
+        "filter_score_range": {"enabled": False},
+    }
+    return merge_nested(params, extra)
+
+
+def score_only_params(extra: dict | None = None) -> dict:
+    """关闭核心过滤器，只测试动量打分参数；上市/停牌过滤保留默认行为。"""
+    return merge_nested(core_filter_params([]), extra)
+
+
+def sdl_only_params(extra: dict | None = None) -> dict:
+    """核心过滤器全关后只开启单日跌幅过滤。"""
+    return merge_nested(
+        core_filter_params(["sdl"]),
+        {"filter_single_day_loss": {"threshold": 0.97}, **(extra or {})},
+    )
+
+
+def build_score_only_m_days_experiments(values):
+    return [
+        (f"m{d:02d}", score_only_params({"scorer": {"m_days": d}}))
+        for d in values
+    ]
+
+
+def build_score_only_decay_experiments(values):
+    return [
+        (f"dw{int(w * 10):02d}", score_only_params({"scorer": {"decay_weight": w}}))
+        for w in values
+    ]
+
+
+def build_sdl_threshold_experiments(values):
+    return [
+        (f"sdl{int(t * 100):03d}", sdl_only_params({"filter_single_day_loss": {"threshold": t}}))
+        for t in values
+    ]
+
+
+def build_only_sdl_m_days_experiments(values):
+    return [
+        (f"m{d:02d}", only_sdl_params({"scorer": {"m_days": d}}))
+        for d in values
+    ]
+
+
+def build_only_sdl_decay_experiments(values):
+    return [
+        (f"dw{int(w * 10):02d}", only_sdl_params({"scorer": {"decay_weight": w}}))
+        for w in values
+    ]
+
+
+def build_only_sdl_threshold_experiments(values):
+    return [
+        (f"sdl{int(t * 100):03d}", only_sdl_params({"filter_single_day_loss": {"threshold": t}}))
+        for t in values
+    ]
+
+
+def build_only_sdl_m_days_sweep():
+    values = [15, 20, 25, 30, 35, 40]
+    experiments = build_only_sdl_m_days_experiments(values)
+    meta = {
+        "name": "only_sdl_m_days",
+        "dimensions": [{"name": "m_days", "display": "动量周期(天)"}],
+        "tag_order": [tag for tag, _ in experiments],
+        "tag_values": {f"m{d:02d}": [d] for d in values},
+    }
+    return experiments, meta
+
+
+def build_only_sdl_decay_weight_sweep():
+    values = [1.0, 1.5, 2.0, 2.5, 3.0]
+    experiments = build_only_sdl_decay_experiments(values)
+    meta = {
+        "name": "only_sdl_decay_weight",
+        "dimensions": [{"name": "decay_weight", "display": "回归衰减权重"}],
+        "tag_order": [tag for tag, _ in experiments],
+        "tag_values": {f"dw{int(w * 10):02d}": [w] for w in values},
+    }
+    return experiments, meta
+
+
+def build_only_sdl_threshold_sweep():
+    values = [0.94, 0.95, 0.96, 0.97, 0.98, 0.99]
+    experiments = build_only_sdl_threshold_experiments(values)
+    meta = {
+        "name": "only_sdl_threshold",
+        "dimensions": [{"name": "threshold", "display": "单日跌幅阈值"}],
+        "tag_order": [tag for tag, _ in experiments],
+        "tag_values": {f"sdl{int(t * 100):03d}": [t] for t in values},
+    }
+    return experiments, meta
+
+
+def build_score_only_m_days_sweep():
+    values = [15, 20, 25, 30, 35, 40]
+    experiments = build_score_only_m_days_experiments(values)
+    meta = {
+        "name": "score_only_m_days",
+        "analysis_type": "score_only",
+        "dimensions": [{"name": "m_days", "display": "动量周期(天)"}],
+        "tag_order": [tag for tag, _ in experiments],
+        "tag_values": {f"m{d:02d}": [d] for d in values},
+    }
+    return experiments, meta
+
+
+def build_score_only_decay_weight_sweep():
+    values = [1.0, 1.5, 2.0, 2.5, 3.0]
+    experiments = build_score_only_decay_experiments(values)
+    meta = {
+        "name": "score_only_decay_weight",
+        "analysis_type": "score_only",
+        "dimensions": [{"name": "decay_weight", "display": "回归衰减权重"}],
+        "tag_order": [tag for tag, _ in experiments],
+        "tag_values": {f"dw{int(w * 10):02d}": [w] for w in values},
+    }
+    return experiments, meta
+
+
+def build_sdl_threshold_sweep():
+    values = [0.94, 0.95, 0.96, 0.97, 0.98, 0.99]
+    experiments = build_sdl_threshold_experiments(values)
+    meta = {
+        "name": "sdl_threshold",
+        "analysis_type": "single_filter_threshold",
+        "dimensions": [{"name": "threshold", "display": "单日跌幅阈值"}],
+        "tag_order": [tag for tag, _ in experiments],
+        "tag_values": {f"sdl{int(t * 100):03d}": [t] for t in values},
+    }
+    return experiments, meta
+
+
+def build_decay_weight_sweep():
+    values = [1.0, 1.5, 2.5, 3.0]
+    experiments = [("baseline", {})] + [
+        (f"dw{d * 10:02.0f}", {"scorer": {"decay_weight": d}})
+        for d in values
+    ]
+    meta = {
+        "name": "decay_weight",
+        "dimensions": [{"name": "decay_weight", "display": "衰减权重"}],
+        "tag_order": [tag for tag, _ in experiments],
+        "tag_values": {
+            "baseline": [2.0],
+            **{f"dw{d * 10:02.0f}": [d] for d in values},
+        },
+    }
+    return experiments, meta
+
+
+def build_volume_threshold_sweep():
+    values = [1.5, 2.5, 3.0]
+    experiments = [("baseline", {})] + [
+        (f"vt{t * 10:02.0f}", {"filter_volume": {"threshold": t}})
+        for t in values
+    ]
+    meta = {
+        "name": "volume_threshold",
+        "dimensions": [{"name": "threshold", "display": "成交量阈值"}],
+        "tag_order": [tag for tag, _ in experiments],
+        "tag_values": {
+            "baseline": [2.0],
+            **{f"vt{t * 10:02.0f}": [t] for t in values},
+        },
+    }
+    return experiments, meta
+
+
+def build_m_days_x_decay_sweep():
+    m_days_values = [15, 20, 25, 30, 35]
+    decay_weight_values = [1.0, 1.5, 2.0, 2.5, 3.0]
+    experiments = [
+        (f"m{d:02d}_dw{w * 10:02.0f}", {"scorer": {"m_days": d, "decay_weight": w}})
+        for d in m_days_values
+        for w in decay_weight_values
+    ]
+    meta = {
+        "name": "m_days_x_decay",
+        "dimensions": [
+            {"name": "m_days", "display": "动量周期(天)"},
+            {"name": "decay_weight", "display": "衰减权重"},
+        ],
+        "tag_order": [tag for tag, _ in experiments],
+        "tag_values": {
+            f"m{d:02d}_dw{w * 10:02.0f}": [d, w]
+            for d in m_days_values
+            for w in decay_weight_values
+        },
+    }
+    return experiments, meta
+
+
+SWEEP_BUILDERS = {
+    "baseline": build_baseline_sweep,
+    "m_days": build_m_days_sweep,
+    "holdings_num": build_holdings_num_sweep,
+    "profit_protection": build_profit_protection_sweep,
+    "short_momentum": build_short_momentum_sweep,
+    "filter_ablation": build_filter_ablation_sweep,
+    "filter_layer": build_filter_layer_sweep,
+    "score_only_m_days": build_score_only_m_days_sweep,
+    "score_only_decay_weight": build_score_only_decay_weight_sweep,
+    "sdl_threshold": build_sdl_threshold_sweep,
+    "only_sdl_m_days": build_only_sdl_m_days_sweep,
+    "only_sdl_decay_weight": build_only_sdl_decay_weight_sweep,
+    "only_sdl_threshold": build_only_sdl_threshold_sweep,
+    "decay_weight": build_decay_weight_sweep,
+    "volume_threshold": build_volume_threshold_sweep,
+    "m_days_x_decay": build_m_days_x_decay_sweep,
 }
 
-# ---- 模式H: 衰减权重 decay_weight 扫描 ----
-# EXPERIMENTS = [
-#     ("baseline", {}),
-# ] + [
-#     (f"dw{d*10:02.0f}", {"scorer": {"decay_weight": d}})
-#     for d in [1.0, 1.5, 2.5, 3.0]
-# ]
-# SWEEP_META = {
-#     "name": "decay_weight",
-#     "dimensions": [{"name": "decay_weight", "display": "衰减权重"}],
-#     "tag_values": {"baseline": [2.0], "dw10": [1.0], "dw15": [1.5],
-#                    "dw25": [2.5], "dw30": [3.0]}
-# }
 
-# ---- 模式I: 成交量阈值扫描 ----
-# EXPERIMENTS = [
-#     ("baseline", {}),
-# ] + [
-#     (f"vt{t*10:02.0f}", {"filter_volume": {"threshold": t}})
-#     for t in [1.5, 2.5, 3.0]
-# ]
-# SWEEP_META = {
-#     "name": "volume_threshold",
-#     "dimensions": [{"name": "threshold", "display": "成交量阈值"}],
-#     "tag_values": {"baseline": [2.0], "vt15": [1.5], "vt25": [2.5], "vt30": [3.0]}
-# }
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(description="七星高照 ETF 轮动批量回测")
+    parser.add_argument("--sweep", choices=sorted(SWEEP_BUILDERS), help="选择要运行的实验组")
+    parser.add_argument("--layer", choices=["1", "2", "3", "4_5"], help="filter_layer 的层级")
+    parser.add_argument("--list-sweeps", action="store_true", help="列出可用实验组后退出")
+    parser.add_argument("--dry-run", action="store_true", help="只打印实验组合，不执行回测")
+    return parser.parse_args(argv)
 
-# ---- 模式J: 二维扫描 m_days x decay_weight ----
-# EXPERIMENTS = [
-#     (f"m{d:02d}_dw{w*10:02.0f}", {"scorer": {"m_days": d, "decay_weight": w}})
-#     for d in [15, 20, 25, 30, 35]
-#     for w in [1.0, 1.5, 2.0, 2.5, 3.0]
-# ]
-# SWEEP_META = {
-#     "name": "m_days_x_decay",
-#     "dimensions": [
-#         {"name": "m_days", "display": "动量周期(天)"},
-#         {"name": "decay_weight", "display": "衰减权重"}
-#     ],
-#     "tag_values": {
-#         f"m{d:02d}_dw{w*10:02.0f}": [d, w]
-#         for d in [15, 20, 25, 30, 35]
-#         for w in [1.0, 1.5, 2.0, 2.5, 3.0]
-#     }
-# }
+
+def resolve_sweep(args):
+    sweep_name = args.sweep or ACTIVE_SWEEP
+    sweep_args = dict(ACTIVE_SWEEP_ARGS) if sweep_name == ACTIVE_SWEEP else {}
+    if args.layer is not None:
+        if sweep_name != "filter_layer":
+            raise ValueError("--layer 只能用于 filter_layer 实验组")
+        sweep_args["layer"] = args.layer
+
+    builder = SWEEP_BUILDERS[sweep_name]
+    experiments, sweep_meta = builder(**sweep_args)
+    return sweep_name, sweep_args, experiments, sweep_meta
+
+
+def print_available_sweeps():
+    print("可用实验组:")
+    for name in sorted(SWEEP_BUILDERS):
+        print(f"  - {name}")
+
+
+def print_sweep_plan(sweep_name, sweep_args, experiments, sweep_meta):
+    output_name = sweep_meta["name"] if sweep_meta else "single"
+    output_dir = BASE_RESULT_DIR / output_name
+    print(f"实验组: {sweep_name}")
+    print(f"参数: {sweep_args}")
+    print(f"输出目录: {output_dir}")
+    print(f"组合数量: {len(experiments)}")
+    for index, (tag, override) in enumerate(experiments, start=1):
+        print(f"\n[{index:02d}] {tag}")
+        print(json.dumps(override, ensure_ascii=False, indent=2))
 
 
 # ==================== 单次回测 ====================
@@ -318,8 +600,23 @@ def extract_metrics(tag: str, result: dict):
 
 
 # ==================== 主流程 ====================
-def main():
+def main(argv=None):
+    global EXPERIMENTS, SWEEP_META
+
+    args = parse_args(argv)
+    if args.list_sweeps:
+        print_available_sweeps()
+        return None
+
+    sweep_name, sweep_args, EXPERIMENTS, SWEEP_META = resolve_sweep(args)
+
+    if args.dry_run:
+        print_sweep_plan(sweep_name, sweep_args, EXPERIMENTS, SWEEP_META)
+        return pd.DataFrame({"tag": [tag for tag, _ in EXPERIMENTS]})
+
     output_dir = get_output_dir()
+    print(f'实验组: {sweep_name}')
+    print(f'实验参数: {sweep_args}')
     print(f'输出目录: {output_dir}')
 
     metrics_list = []
