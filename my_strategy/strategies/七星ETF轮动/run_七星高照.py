@@ -37,6 +37,7 @@ BASE_RESULT_DIR.mkdir(exist_ok=True, parents=True)
 #   "sdl_threshold"             核心过滤器全关，只开启单日跌幅过滤并扫描 threshold
 #   "score_grid_m_days_decay"   核心过滤器全关，扫描 m_days × decay_weight
 #   "score_sdl_grid_compact"    只开启单日跌幅过滤，扫描稳定区间三维组合
+#   "score_sdl_grid_refined_small"  只开启单日跌幅过滤，扫描 36 组精简验证组合
 #   "score_sdl_grid_full"       只开启单日跌幅过滤，扫描完整三维组合
 #
 # 其他可用实验组:
@@ -49,7 +50,7 @@ BASE_RESULT_DIR.mkdir(exist_ok=True, parents=True)
 #   ACTIVE_SWEEP_ARGS = {}
 #   ACTIVE_SWEEP = "filter_layer"
 #   ACTIVE_SWEEP_ARGS = {"layer": "4_5"}
-ACTIVE_SWEEP = "score_only_m_days"
+ACTIVE_SWEEP = "score_sdl_grid_refined_small"
 ACTIVE_SWEEP_ARGS = {}
 
 # 运行时状态，由 resolve_sweep() 根据 ACTIVE_SWEEP / 命令行参数生成。
@@ -337,6 +338,14 @@ def sdl_only_params(extra: dict | None = None) -> dict:
     )
 
 
+def sdl_tag(threshold: float) -> str:
+    """格式化单日跌幅阈值；两位小数保持旧命名，三位小数避免 0.965 与 0.96 冲突。"""
+    scaled_100 = round(threshold * 100)
+    if abs(threshold - scaled_100 / 100) < 1e-9:
+        return f"sdl{scaled_100:03d}"
+    return f"sdl{round(threshold * 1000):04d}"
+
+
 def build_score_only_m_days_experiments(values):
     return [
         (f"m{d:02d}", score_only_params({"scorer": {"m_days": d}}))
@@ -353,7 +362,7 @@ def build_score_only_decay_experiments(values):
 
 def build_sdl_threshold_experiments(values):
     return [
-        (f"sdl{int(t * 100):03d}", sdl_only_params({"filter_single_day_loss": {"threshold": t}}))
+        (sdl_tag(t), sdl_only_params({"filter_single_day_loss": {"threshold": t}}))
         for t in values
     ]
 
@@ -372,7 +381,7 @@ def build_score_grid_experiments(m_days_values, decay_weight_values):
 def build_score_sdl_grid_experiments(m_days_values, decay_weight_values, threshold_values):
     return [
         (
-            f"m{m_days:02d}_dw{int(decay_weight * 10):02d}_sdl{int(threshold * 100):03d}",
+            f"m{m_days:02d}_dw{int(decay_weight * 10):02d}_{sdl_tag(threshold)}",
             sdl_only_params({
                 "scorer": {"m_days": m_days, "decay_weight": decay_weight},
                 "filter_single_day_loss": {"threshold": threshold},
@@ -436,7 +445,7 @@ def build_only_sdl_threshold_sweep():
         "name": "only_sdl_threshold",
         "dimensions": [{"name": "threshold", "display": "单日跌幅阈值"}],
         "tag_order": [tag for tag, _ in experiments],
-        "tag_values": {f"sdl{int(t * 100):03d}": [t] for t in values},
+        "tag_values": {sdl_tag(t): [t] for t in values},
     }
     return experiments, meta
 
@@ -475,13 +484,13 @@ def build_sdl_threshold_sweep():
         "analysis_type": "single_filter_threshold",
         "dimensions": [{"name": "threshold", "display": "单日跌幅阈值"}],
         "tag_order": [tag for tag, _ in experiments],
-        "tag_values": {f"sdl{int(t * 100):03d}": [t] for t in values},
+        "tag_values": {sdl_tag(t): [t] for t in values},
     }
     return experiments, meta
 
 
 def build_score_grid_m_days_decay_sweep():
-    m_days_values = [15, 20, 25, 30, 35, 40, 50, 60]
+    m_days_values = [15, 20, 25, 30, 35, 40]
     decay_weight_values = [1.0, 1.5, 2.0, 2.5, 3.0]
     experiments = build_score_grid_experiments(m_days_values, decay_weight_values)
     meta = {
@@ -502,9 +511,9 @@ def build_score_grid_m_days_decay_sweep():
 
 
 def build_score_sdl_grid_compact_sweep():
-    m_days_values = [15, 20, 25, 60]
-    decay_weight_values = [2.0, 2.5, 3.0]
-    threshold_values = [0.95, 0.96, 0.97, 0.98]
+    m_days_values = [20, 25, 30,35]
+    decay_weight_values = [1.5,2.0, 2.5]
+    threshold_values = [0.95, 0.96, 0.97]
     experiments = build_score_sdl_grid_experiments(m_days_values, decay_weight_values, threshold_values)
     meta = {
         "name": "score_sdl_grid_compact",
@@ -516,7 +525,35 @@ def build_score_sdl_grid_compact_sweep():
         ],
         "tag_order": [tag for tag, _ in experiments],
         "tag_values": {
-            f"m{m_days:02d}_dw{int(decay_weight * 10):02d}_sdl{int(threshold * 100):03d}": [
+            f"m{m_days:02d}_dw{int(decay_weight * 10):02d}_{sdl_tag(threshold)}": [
+                m_days,
+                decay_weight,
+                threshold,
+            ]
+            for m_days in m_days_values
+            for decay_weight in decay_weight_values
+            for threshold in threshold_values
+        },
+    }
+    return experiments, meta
+
+
+def build_score_sdl_grid_refined_small_sweep():
+    m_days_values = [18, 20, 22, 25]
+    decay_weight_values = [1.5, 2.0, 2.5]
+    threshold_values = [0.96, 0.965, 0.97]
+    experiments = build_score_sdl_grid_experiments(m_days_values, decay_weight_values, threshold_values)
+    meta = {
+        "name": "score_sdl_grid_refined_small",
+        "analysis_type": "score_sdl_grid",
+        "dimensions": [
+            {"name": "m_days", "display": "动量周期(天)"},
+            {"name": "decay_weight", "display": "回归衰减权重"},
+            {"name": "sdl_threshold", "display": "单日跌幅阈值"},
+        ],
+        "tag_order": [tag for tag, _ in experiments],
+        "tag_values": {
+            f"m{m_days:02d}_dw{int(decay_weight * 10):02d}_{sdl_tag(threshold)}": [
                 m_days,
                 decay_weight,
                 threshold,
@@ -544,7 +581,7 @@ def build_score_sdl_grid_full_sweep():
         ],
         "tag_order": [tag for tag, _ in experiments],
         "tag_values": {
-            f"m{m_days:02d}_dw{int(decay_weight * 10):02d}_sdl{int(threshold * 100):03d}": [
+            f"m{m_days:02d}_dw{int(decay_weight * 10):02d}_{sdl_tag(threshold)}": [
                 m_days,
                 decay_weight,
                 threshold,
@@ -617,26 +654,38 @@ def build_m_days_x_decay_sweep():
     return experiments, meta
 
 
+# 实验组注册表：
+# key 是 ACTIVE_SWEEP / --sweep 使用的名字，value 是生成该实验组的函数。
 SWEEP_BUILDERS = {
-    "baseline": build_baseline_sweep,
-    "m_days": build_m_days_sweep,
-    "holdings_num": build_holdings_num_sweep,
-    "profit_protection": build_profit_protection_sweep,
-    "short_momentum": build_short_momentum_sweep,
-    "filter_ablation": build_filter_ablation_sweep,
-    "filter_layer": build_filter_layer_sweep,
-    "score_only_m_days": build_score_only_m_days_sweep,
-    "score_only_decay_weight": build_score_only_decay_weight_sweep,
-    "sdl_threshold": build_sdl_threshold_sweep,
-    "score_grid_m_days_decay": build_score_grid_m_days_decay_sweep,
-    "score_sdl_grid_compact": build_score_sdl_grid_compact_sweep,
-    "score_sdl_grid_full": build_score_sdl_grid_full_sweep,
-    "only_sdl_m_days": build_only_sdl_m_days_sweep,
-    "only_sdl_decay_weight": build_only_sdl_decay_weight_sweep,
-    "only_sdl_threshold": build_only_sdl_threshold_sweep,
-    "decay_weight": build_decay_weight_sweep,
-    "volume_threshold": build_volume_threshold_sweep,
-    "m_days_x_decay": build_m_days_x_decay_sweep,
+    # ---- 基础运行 ----
+    "baseline": build_baseline_sweep,  # 单次默认参数回测，用于确认基础策略表现
+
+    # ---- 过滤器分析 ----
+    "filter_ablation": build_filter_ablation_sweep,  # 从全开出发逐个关闭过滤器，看每个过滤器的边际影响
+    "filter_layer": build_filter_layer_sweep,  # 从全关出发按层组合过滤器，需要 --layer 或 ACTIVE_SWEEP_ARGS["layer"]
+
+    # ---- 推荐的一维参数敏感性：先隔离动量得分，再单独看 sdl ----
+    "score_only_m_days": build_score_only_m_days_sweep,  # 核心过滤器全关，只扫描动量周期 m_days
+    "score_only_decay_weight": build_score_only_decay_weight_sweep,  # 核心过滤器全关，只扫描回归衰减权重
+    "sdl_threshold": build_sdl_threshold_sweep,  # 核心过滤器全关，只开启单日跌幅过滤并扫描阈值
+
+    # ---- 推荐的组合参数网格：一维稳定后再看组合效应 ----
+    "score_grid_m_days_decay": build_score_grid_m_days_decay_sweep,  # 核心过滤器全关，扫描 m_days × decay_weight
+    "score_sdl_grid_compact": build_score_sdl_grid_compact_sweep,  # 只开 sdl，扫描稳定区间三维组合
+    "score_sdl_grid_refined_small": build_score_sdl_grid_refined_small_sweep,  # 只开 sdl，扫描 36 组精简验证组合
+    "score_sdl_grid_full": build_score_sdl_grid_full_sweep,  # 只开 sdl，扫描完整三维组合，用于最终确认
+
+    # ---- 旧实验/兼容入口：保留历史能力，不作为当前主分析路径 ----
+    "m_days": build_m_days_sweep,  # 默认过滤器状态下扫描 m_days，结果会混入过滤器影响
+    "decay_weight": build_decay_weight_sweep,  # 默认过滤器状态下扫描 decay_weight，结果会混入过滤器影响
+    "m_days_x_decay": build_m_days_x_decay_sweep,  # 默认过滤器状态下扫描 m_days × decay_weight
+    "holdings_num": build_holdings_num_sweep,  # 扫描持仓数量
+    "profit_protection": build_profit_protection_sweep,  # 扫描盈利保护阈值
+    "short_momentum": build_short_momentum_sweep,  # 扫描短期动量阈值
+    "volume_threshold": build_volume_threshold_sweep,  # 扫描成交量过滤阈值
+    "only_sdl_m_days": build_only_sdl_m_days_sweep,  # 只开 sdl 时扫描 m_days，非纯动量得分实验
+    "only_sdl_decay_weight": build_only_sdl_decay_weight_sweep,  # 只开 sdl 时扫描 decay_weight，非纯动量得分实验
+    "only_sdl_threshold": build_only_sdl_threshold_sweep,  # 旧版只开 sdl 扫阈值入口，推荐使用 sdl_threshold
 }
 
 

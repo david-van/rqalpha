@@ -25,7 +25,7 @@ from my_strategy.common_file import project_root
 
 
 BASE_DIR = Path(project_root) / "my_strategy" / "strategies" / "batch_results" / "七星高照"
-DEFAULT_SWEEP = "score_grid_m_days_decay"
+DEFAULT_SWEEP = "score_sdl_grid_refined_small"
 TOP_N = 20
 TRADING_DAYS_PER_YEAR = 250
 
@@ -440,6 +440,7 @@ def build_dashboard(sweep_name: str, sweep_dir: Path, meta: dict, df: pd.DataFra
   </style>
 </head>
 <body>
+  <script>{plotly_js}</script>
   <header>
     <h1>参数网格分析</h1>
     <p>{summary_text}</p>
@@ -470,7 +471,6 @@ def build_dashboard(sweep_name: str, sweep_dir: Path, meta: dict, df: pd.DataFra
     <div class="panel table-wrap">{table_html(candidate_df, table_cols, "候选参数核心指标")}</div>
   </section>
 
-  <script>{plotly_js}</script>
   <script>
     function showTab(id, btn) {{
       document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));

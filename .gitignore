@@ -27,6 +27,7 @@ rqalpha/_version.py
 *.log
 
 .claude/settings.local.json
+.pytest_cache
 
 #过滤运行结果
 my_strategy/strategies/batch_results
