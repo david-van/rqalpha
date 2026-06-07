@@ -8,6 +8,7 @@
 """
 
 import json
+import html
 import pickle
 import sys
 import warnings
@@ -38,7 +39,7 @@ BASE_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results' /
 
 # 修改此处指定要分析的扫描，设为 None 则列出所有可用扫描
 # 命令行 --sweep 参数优先级高于此处
-DEFAULT_SWEEP = "single"
+DEFAULT_SWEEP = "filter_layer_4_5"
 
 # Bundle 日线数据路径
 BUNDLE_PATH = Path("D:/datas/bundle/stocks.h5")
@@ -61,6 +62,8 @@ def load_all_results(result_dir: Path) -> dict:
             "summary": data.get("summary", {}),
             "portfolio": data.get("portfolio", pd.DataFrame()),
             "trades": data.get("trades", pd.DataFrame()),
+            "positions_weight": data.get("positions_weight", pd.DataFrame()),
+            "stock_positions": data.get("stock_positions", pd.DataFrame()),
         }
         print(f"已加载: {tag}  ({len(results[tag]['trades'])} 笔交易)")
     return results
@@ -180,6 +183,59 @@ def _get_tag_value(meta: dict, tag: str, dim_index: int = 0):
         return vals[dim_index] if dim_index < len(vals) else None
     return vals
 
+
+def _get_tag_order(results: dict, meta: dict | None = None) -> list:
+    """按 meta 中的 tag_order 展示；缺失时保留加载顺序。"""
+    tags = list(results.keys())
+    if not meta:
+        return tags
+
+    ordered = []
+    for tag in meta.get("tag_order", []):
+        if tag in results and tag not in ordered:
+            ordered.append(tag)
+
+    if not ordered:
+        for tag in meta.get("tag_values", {}).keys():
+            if tag in results and tag not in ordered:
+                ordered.append(tag)
+
+    ordered.extend(tag for tag in tags if tag not in ordered)
+    return ordered
+
+
+def _get_tag_label(meta: dict | None, tag: str) -> str:
+    if not meta:
+        return tag
+    label = _get_tag_value(meta, tag, 0)
+    return str(label) if label is not None else tag
+
+
+def _get_filter_names(meta: dict | None, tag: str) -> str:
+    if not meta:
+        return _get_tag_label(meta, tag)
+    filter_sets = meta.get("filter_sets", {})
+    filter_labels = meta.get("filter_labels", {})
+    keys = filter_sets.get(tag)
+    if keys is None:
+        return _get_tag_label(meta, tag)
+    if not keys:
+        return "核心过滤器全关"
+    return "+".join(filter_labels.get(key, key) for key in keys)
+
+
+def _format_pct(value, signed: bool = False) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    sign = "+" if signed else ""
+    return f"{value:{sign}.2%}"
+
+
+def _format_num(value, digits: int = 3, signed: bool = False) -> str:
+    if value is None or pd.isna(value):
+        return ""
+    sign = "+" if signed else ""
+    return f"{value:{sign}.{digits}f}"
 
 
 def _get_color(i: int) -> str:
@@ -717,6 +773,323 @@ def build_filter_contribution_figure(results: dict, meta: dict) -> go.Figure | N
     fig.update_yaxes(title_text="贡献 (正=过滤器有帮助)", tickformat=".0%", row=2, col=1)
 
     return fig
+
+
+# ============================================================
+# Tab 3C: 过滤器分层分析（filter_layer 专用，也兼容存在 base_off 的结果）
+# ============================================================
+def _get_nv_series(data: dict) -> pd.Series | None:
+    pf = data.get("portfolio", pd.DataFrame())
+    if pf.empty or "unit_net_value" not in pf.columns:
+        return None
+    nv = pf["unit_net_value"].dropna().copy()
+    if not isinstance(nv.index, pd.DatetimeIndex):
+        nv.index = pd.to_datetime(nv.index)
+    return nv.sort_index()
+
+
+def _get_trade_cost(trades: pd.DataFrame) -> float:
+    if trades.empty:
+        return 0.0
+    if "transaction_cost" in trades.columns:
+        return float(trades["transaction_cost"].fillna(0).sum())
+    total = 0.0
+    for col in ["commission", "tax"]:
+        if col in trades.columns:
+            total += float(trades[col].fillna(0).sum())
+    return total
+
+
+def _holding_signature_from_positions_weight(data: dict) -> pd.Series | None:
+    pos = data.get("positions_weight", pd.DataFrame())
+    if not isinstance(pos, pd.DataFrame) or pos.empty:
+        return None
+
+    df = pos.copy()
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+
+    signatures = []
+    for _, row in df.iterrows():
+        active = []
+        for col, val in row.items():
+            if str(col).lower() in ("cash", "total_value"):
+                continue
+            try:
+                if abs(float(val)) > 1e-8:
+                    active.append(str(col))
+            except (TypeError, ValueError):
+                continue
+        signatures.append("|".join(sorted(active)))
+    return pd.Series(signatures, index=df.index)
+
+
+def _holding_signature_from_trades(data: dict) -> pd.Series | None:
+    trades = data.get("trades", pd.DataFrame())
+    nv = _get_nv_series(data)
+    if trades.empty or nv is None:
+        return None
+
+    df = trades.copy()
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index)
+    df = df.sort_index()
+
+    positions = {}
+    events = []
+    for ts, day_trades in df.groupby(df.index.normalize()):
+        for _, row in day_trades.iterrows():
+            code = row.get("order_book_id")
+            if not code:
+                continue
+            qty = abs(float(row.get("last_quantity", 0) or 0))
+            if str(row.get("side", "")).upper() == "BUY":
+                positions[code] = positions.get(code, 0.0) + qty
+            else:
+                positions[code] = positions.get(code, 0.0) - qty
+            if positions.get(code, 0.0) <= 1e-8:
+                positions.pop(code, None)
+        events.append((ts, "|".join(sorted(positions.keys()))))
+
+    if not events:
+        return None
+
+    event_series = pd.Series(
+        [item[1] for item in events],
+        index=pd.DatetimeIndex([item[0] for item in events]),
+    )
+    target_index = nv.index.normalize()
+    return event_series.reindex(target_index, method="ffill").fillna("")
+
+
+def _get_holding_signature(data: dict) -> pd.Series | None:
+    sig = _holding_signature_from_positions_weight(data)
+    if sig is not None:
+        return sig
+    return _holding_signature_from_trades(data)
+
+
+def _compute_filter_increment_rows(results: dict, meta: dict | None) -> list:
+    if not results:
+        return []
+
+    baseline_tag = (meta or {}).get("baseline") or ("base_off" if "base_off" in results else None)
+    if baseline_tag is None or baseline_tag not in results:
+        return []
+
+    base = results[baseline_tag]
+    base_summary = base["summary"]
+    base_nv = _get_nv_series(base)
+    base_sig = _get_holding_signature(base)
+    base_cost = _get_trade_cost(base["trades"])
+
+    rows = []
+    for tag in _get_tag_order(results, meta):
+        data = results[tag]
+        s = data["summary"]
+        trades = data["trades"]
+        nv = _get_nv_series(data)
+        sig = _get_holding_signature(data)
+        cost = _get_trade_cost(trades)
+
+        holding_diff_days = None
+        holding_diff_pct = None
+        first_diff_date = ""
+        if base_sig is not None and sig is not None:
+            b, v = base_sig.align(sig, join="inner")
+            if len(b) > 0:
+                diff = b != v
+                holding_diff_days = int(diff.sum())
+                holding_diff_pct = float(diff.mean())
+                if diff.any():
+                    first_diff_date = diff[diff].index[0].strftime("%Y-%m-%d")
+
+        max_nav_diff = None
+        max_nav_diff_date = ""
+        if base_nv is not None and nv is not None:
+            b_nv, v_nv = base_nv.align(nv, join="inner")
+            if len(b_nv) > 0:
+                nav_diff = (v_nv - b_nv).abs()
+                max_nav_diff = float(nav_diff.max())
+                if max_nav_diff > 0:
+                    max_nav_diff_date = nav_diff.idxmax().strftime("%Y-%m-%d")
+
+        row = {
+            "layer": (meta or {}).get("layer", ""),
+            "tag": tag,
+            "label": _get_tag_label(meta, tag),
+            "filters": _get_filter_names(meta, tag),
+            "total": s.get("total_returns", np.nan),
+            "annualized": s.get("annualized_returns", np.nan),
+            "sharpe": s.get("sharpe", np.nan),
+            "sortino": s.get("sortino", np.nan),
+            "max_drawdown": s.get("max_drawdown", np.nan),
+            "turnover": s.get("turnover", np.nan),
+            "trade_count": len(trades),
+            "cost": cost,
+            "delta_total": s.get("total_returns", 0) - base_summary.get("total_returns", 0),
+            "delta_annualized": s.get("annualized_returns", 0) - base_summary.get("annualized_returns", 0),
+            "delta_sharpe": s.get("sharpe", 0) - base_summary.get("sharpe", 0),
+            "drawdown_improve": base_summary.get("max_drawdown", 0) - s.get("max_drawdown", 0),
+            "delta_trades": len(trades) - len(base["trades"]),
+            "delta_cost": cost - base_cost,
+            "holding_diff_days": holding_diff_days,
+            "holding_diff_pct": holding_diff_pct,
+            "first_diff_date": first_diff_date,
+            "max_nav_diff": max_nav_diff,
+            "max_nav_diff_date": max_nav_diff_date,
+        }
+        rows.append(row)
+    return rows
+
+
+def build_filter_increment_figure(results: dict, meta: dict) -> go.Figure | None:
+    rows = _compute_filter_increment_rows(results, meta)
+    if len(rows) < 2:
+        return None
+
+    labels = [r["tag"] for r in rows]
+
+    fig = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=(
+            "全周期年化收益",
+            "相对基准的收益/回撤增量",
+            "相对基准的夏普变化",
+            "交易次数与成本变化",
+        ),
+        specs=[[{}, {}], [{}, {"secondary_y": True}]],
+        vertical_spacing=0.14,
+        horizontal_spacing=0.10,
+    )
+
+    fig.add_trace(
+        go.Bar(
+            name="年化收益",
+            x=labels,
+            y=[r["annualized"] for r in rows],
+            text=[_format_pct(r["annualized"]) for r in rows],
+            textposition="outside",
+            marker_color=_get_color(0),
+            hovertemplate="%{x}<br>年化收益: %{y:.2%}<extra></extra>",
+        ),
+        row=1, col=1,
+    )
+
+    fig.add_trace(
+        go.Bar(
+            name="年化收益差",
+            x=labels,
+            y=[r["delta_annualized"] for r in rows],
+            marker_color=_get_color(1),
+            hovertemplate="%{x}<br>年化收益差: %{y:+.2%}<extra></extra>",
+        ),
+        row=1, col=2,
+    )
+    fig.add_trace(
+        go.Bar(
+            name="回撤改善",
+            x=labels,
+            y=[r["drawdown_improve"] for r in rows],
+            marker_color=_get_color(2),
+            hovertemplate="%{x}<br>回撤改善: %{y:+.2%}<extra></extra>",
+        ),
+        row=1, col=2,
+    )
+
+    fig.add_trace(
+        go.Bar(
+            name="夏普变化",
+            x=labels,
+            y=[r["delta_sharpe"] for r in rows],
+            text=[_format_num(r["delta_sharpe"], signed=True) for r in rows],
+            textposition="outside",
+            marker_color=_get_color(3),
+            hovertemplate="%{x}<br>夏普变化: %{y:+.3f}<extra></extra>",
+        ),
+        row=2, col=1,
+    )
+
+    fig.add_trace(
+        go.Bar(
+            name="交易次数差",
+            x=labels,
+            y=[r["delta_trades"] for r in rows],
+            marker_color=_get_color(4),
+            hovertemplate="%{x}<br>交易次数差: %{y:+d}<extra></extra>",
+        ),
+        row=2, col=2,
+        secondary_y=False,
+    )
+    fig.add_trace(
+        go.Scatter(
+            name="成本差",
+            x=labels,
+            y=[r["delta_cost"] for r in rows],
+            mode="lines+markers",
+            line=dict(color=_get_color(5), width=2),
+            hovertemplate="%{x}<br>成本差: %{y:+.2f}<extra></extra>",
+        ),
+        row=2, col=2,
+        secondary_y=True,
+    )
+
+    fig.update_layout(
+        title=dict(text="过滤器分层分析：相对 base_off 的全周期效果", font=dict(size=18)),
+        autosize=True,
+        height=850,
+        barmode="group",
+        hovermode="closest",
+        legend=dict(font=dict(size=10), orientation="h", yanchor="top", y=-0.12),
+    )
+    fig.update_xaxes(tickangle=-30)
+    fig.update_yaxes(title_text="年化收益", tickformat=".0%", row=1, col=1)
+    fig.update_yaxes(title_text="增量", tickformat=".0%", row=1, col=2)
+    fig.update_yaxes(title_text="夏普变化", row=2, col=1)
+    fig.update_yaxes(title_text="交易次数差", row=2, col=2, secondary_y=False)
+    fig.update_yaxes(title_text="成本差", row=2, col=2, secondary_y=True)
+    return fig
+
+
+def build_filter_increment_table_html(results: dict, meta: dict | None) -> str:
+    rows = _compute_filter_increment_rows(results, meta)
+    if len(rows) < 2:
+        return "<p class='no-data'>需要包含 base_off 和至少一个过滤器组合结果</p>"
+
+    columns = [
+        ("层级", lambda r: r["layer"]),
+        ("组合", lambda r: r["tag"]),
+        ("开启过滤器", lambda r: r["filters"]),
+        ("累计收益", lambda r: _format_pct(r["total"])),
+        ("年化收益", lambda r: _format_pct(r["annualized"])),
+        ("最大回撤", lambda r: _format_pct(r["max_drawdown"])),
+        ("夏普", lambda r: _format_num(r["sharpe"])),
+        ("收益差", lambda r: _format_pct(r["delta_total"], signed=True)),
+        ("年化差", lambda r: _format_pct(r["delta_annualized"], signed=True)),
+        ("回撤改善", lambda r: _format_pct(r["drawdown_improve"], signed=True)),
+        ("夏普差", lambda r: _format_num(r["delta_sharpe"], signed=True)),
+        ("交易次数差", lambda r: f"{r['delta_trades']:+d}"),
+        ("成本差", lambda r: f"{r['delta_cost']:+.2f}"),
+        ("持仓不同天数", lambda r: "" if r["holding_diff_days"] is None else str(r["holding_diff_days"])),
+        ("第一次分歧", lambda r: r["first_diff_date"]),
+        ("最大净值差日期", lambda r: r["max_nav_diff_date"]),
+        ("最大净值差", lambda r: "" if r["max_nav_diff"] is None else f"{r['max_nav_diff']:.4f}"),
+    ]
+
+    thead = "<tr>" + "".join(f"<th>{html.escape(name)}</th>" for name, _ in columns) + "</tr>"
+    body = ""
+    for row in rows:
+        cells = []
+        for _, getter in columns:
+            value = getter(row)
+            cells.append(f"<td>{html.escape(str(value))}</td>")
+        body += "<tr>" + "".join(cells) + "</tr>"
+
+    return f"""<table class="summary-table">
+<thead>{thead}</thead>
+<tbody>{body}</tbody>
+</table>"""
 
 
 # ============================================================
@@ -1638,12 +2011,14 @@ def build_dashboard_html(results: dict, output_path: Path, meta: dict = None) ->
     sensitivity_fig = build_sensitivity_figure(results, meta) if meta else None
     grid_heatmap_fig = build_grid_heatmap_figure(results, meta) if meta else None
     filter_ablation_fig = build_filter_contribution_figure(results, meta) if meta else None
+    filter_increment_fig = build_filter_increment_figure(results, meta) if meta else None
     trades_fig = build_trades_figure(results)
     yearly_fig = build_yearly_figure(results)
     risk_return_fig = build_risk_return_figure(results)
 
     # Summary 表格
     summary_table_html = build_summary_table_html(results)
+    filter_increment_table_html = build_filter_increment_table_html(results, meta) if meta else ""
 
     # ---- 深度分析：每个实验单独生成 4 张图 + worst days 表 ----
     print("生成深度分析图表...")
@@ -1697,6 +2072,7 @@ def build_dashboard_html(results: dict, output_path: Path, meta: dict = None) ->
     if filter_ablation_fig is not None:
         sens_specs.append(("filter_ab_main", filter_ablation_fig))
     tab_figures["sensitivity"] = sens_specs
+    tab_figures["filter_increment"] = [("fi_main", filter_increment_fig)] if filter_increment_fig is not None else []
 
     tab_figures["trades"] = [("tr_main", trades_fig)]
     tab_figures["yearly"] = [("yr_main", yearly_fig)] if yearly_fig is not None else []
@@ -1796,6 +2172,15 @@ def build_dashboard_html(results: dict, output_path: Path, meta: dict = None) ->
         yearly_content = "<p class='no-data'>无逐年数据</p>"
 
     risk_content = _make_plot_container("rr_main")
+
+    if filter_increment_fig is not None:
+        filter_increment_content = f"""{_make_plot_container("fi_main")}
+    <div class="plot-container">
+      <h3>分层诊断表</h3>
+      {filter_increment_table_html}
+    </div>"""
+    else:
+        filter_increment_content = "<p class='no-data'>当前扫描不是 filter_layer，或缺少 base_off 基准结果</p>"
 
     # 深度分析：第一个实验的默认 chart 数据 + 下拉框
     first_tag = tags[0] if tags else ""
@@ -2098,6 +2483,7 @@ def build_dashboard_html(results: dict, output_path: Path, meta: dict = None) ->
     <button class="tab-btn active" onclick="switchTab(event, 'overview')">概览</button>
     <button class="tab-btn" onclick="switchTab(event, 'curves')">曲线对比</button>
     <button class="tab-btn" onclick="switchTab(event, 'sensitivity')">参数敏感性</button>
+    <button class="tab-btn" onclick="switchTab(event, 'filter_increment')">过滤器分层分析</button>
     <button class="tab-btn" onclick="switchTab(event, 'trades')">交易分析</button>
     <button class="tab-btn" onclick="switchTab(event, 'yearly')">年度分析</button>
     <button class="tab-btn" onclick="switchTab(event, 'risk')">风险收益</button>
@@ -2119,6 +2505,10 @@ def build_dashboard_html(results: dict, output_path: Path, meta: dict = None) ->
 
   <div class="tab-panel" id="sensitivity">
     {sensitivity_content}
+  </div>
+
+  <div class="tab-panel" id="filter_increment">
+    {filter_increment_content}
   </div>
 
   <div class="tab-panel" id="trades">

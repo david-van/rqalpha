@@ -15,6 +15,7 @@ import os
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
+from itertools import combinations
 
 from my_strategy.common_file import project_root
 from rqalpha import run_file
@@ -52,7 +53,7 @@ def make_base_config(tag: str):
             "sys_transaction_cost": {
                 "enabled": True,
                 "stock_commission_multiplier": 0.25,
-                "stock_min_commission": 5,
+                "stock_min_commission": 0,
                 "tax_multiplier": 0,
             },
             "sys_simulation": {
@@ -143,30 +144,103 @@ SWEEP_META = None
 #                    "sm_00": [0.0], "sm_05": [0.05], "sm_10": [0.10]}
 # }
 
-# ---- 模式G: 过滤器开关对比 ----
+# ---- 模式G1: 过滤器关闭消融（从全开出发，逐个关闭）----
+CORE_FILTERS = {
+    "pp": ("filter_profit_protection", "盈利保护"),
+    "vol": ("filter_volume", "成交量"),
+    "sm": ("filter_short_momentum", "短期动量"),
+    "sdl": ("filter_single_day_loss", "单日跌幅"),
+    "sr": ("filter_score_range", "得分范围"),
+}
+
+
+def core_filter_params(enabled_keys):
+    """生成核心过滤器开关参数；上市/停牌过滤始终保留。"""
+    enabled_keys = set(enabled_keys)
+    return {
+        param_name: {"enabled": key in enabled_keys}
+        for key, (param_name, _) in CORE_FILTERS.items()
+    }
+
+
+def filter_label(keys):
+    if not keys:
+        return "核心过滤器全关"
+    return "+".join(CORE_FILTERS[key][1] for key in keys)
+
+
+def filter_tag(keys):
+    if not keys:
+        return "base_off"
+    if len(keys) == 1:
+        return f"only_{keys[0]}"
+    if len(keys) == len(CORE_FILTERS):
+        return "all_on"
+    return "_".join(keys)
+
+
+def build_filter_layer_experiments(layer):
+    """生成指定层级的过滤器组合；每层都带 base_off 作为基准。"""
+    filter_keys = list(CORE_FILTERS.keys())
+    experiments = [("base_off", [])]
+
+    if layer == "4_5":
+        sizes = [4, len(filter_keys)]
+    else:
+        layer = int(layer)
+        if layer < 1 or layer > 3:
+            raise ValueError("FILTER_LAYER 只能是 1、2、3 或 '4_5'")
+        sizes = [layer]
+
+    for size in sizes:
+        for keys in combinations(filter_keys, size):
+            keys = list(keys)
+            experiments.append((filter_tag(keys), keys))
+    return experiments
+
+
 # EXPERIMENTS = [
-    ("all_on", {}),
-    ("no_pp", {"filter_profit_protection": {"enabled": False}}),
-    ("no_vol", {"filter_volume": {"enabled": False}}),
-    ("no_sm", {"filter_short_momentum": {"enabled": False}}),
-    ("no_sdl", {"filter_single_day_loss": {"enabled": False}}),
-    ("no_sr", {"filter_score_range": {"enabled": False}}),
-    ("all_off", {
-        "filter_profit_protection": {"enabled": False},
-        "filter_volume": {"enabled": False},
-        "filter_short_momentum": {"enabled": False},
-        "filter_single_day_loss": {"enabled": False},
-        "filter_score_range": {"enabled": False},
-    }),
+#     ("all_on", {}),
+#     ("no_pp", {"filter_profit_protection": {"enabled": False}}),
+#     ("no_vol", {"filter_volume": {"enabled": False}}),
+#     ("no_sm", {"filter_short_momentum": {"enabled": False}}),
+#     ("no_sdl", {"filter_single_day_loss": {"enabled": False}}),
+#     ("no_sr", {"filter_score_range": {"enabled": False}}),
+#     ("all_off", core_filter_params([])),
 # ]
 # SWEEP_META = {
 #     "name": "filter_ablation",
-    "dimensions": [{"name": "variant", "display": "过滤器组合"}],
-    "tag_values": {"all_on": ["全部开启"], "no_pp": ["关盈利保护"],
-                   "no_vol": ["关成交量"], "no_sm": ["关短期动量"],
+#     "dimensions": [{"name": "variant", "display": "过滤器组合"}],
+#     "tag_order": ["all_on", "no_pp", "no_vol", "no_sm", "no_sdl", "no_sr", "all_off"],
+#     "tag_values": {"all_on": ["全部开启"], "no_pp": ["关盈利保护"],
+#                    "no_vol": ["关成交量"], "no_sm": ["关短期动量"],
 #                    "no_sdl": ["关单日跌幅"], "no_sr": ["关得分范围"],
-#                    "all_off": ["全关"]}
+#                    "all_off": ["核心过滤器全关"]},
 # }
+
+# ---- 模式G2: 过滤器分层分析（每次只跑一层，每层单独输出）----
+FILTER_LAYER = '4_5'  # 可选: 1、2、3、"4_5"
+LAYER_EXPERIMENTS = build_filter_layer_experiments(FILTER_LAYER)
+LAYER_NAME = f"filter_layer_{FILTER_LAYER}"
+
+EXPERIMENTS = [
+    (tag, core_filter_params(keys))
+    for tag, keys in LAYER_EXPERIMENTS
+]
+SWEEP_META = {
+    "name": LAYER_NAME,
+    "analysis_type": "filter_layer",
+    "dimensions": [{"name": "variant", "display": "过滤器组合"}],
+    "layer": FILTER_LAYER,
+    "baseline": "base_off",
+    "tag_order": [tag for tag, _ in LAYER_EXPERIMENTS],
+    "filter_sets": {tag: keys for tag, keys in LAYER_EXPERIMENTS},
+    "filter_labels": {key: label for key, (_, label) in CORE_FILTERS.items()},
+    "tag_values": {
+        tag: [filter_label(keys)]
+        for tag, keys in LAYER_EXPERIMENTS
+    },
+}
 
 # ---- 模式H: 衰减权重 decay_weight 扫描 ----
 # EXPERIMENTS = [
