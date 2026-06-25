@@ -39,7 +39,7 @@ BASE_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results' /
 
 # 修改此处指定要分析的扫描，设为 None 则列出所有可用扫描
 # 命令行 --sweep 参数优先级高于此处
-DEFAULT_SWEEP = "score_sdl_grid_compact"
+DEFAULT_SWEEP = "score_sdl_grid_refined_small"
 
 # Bundle 日线数据路径
 BUNDLE_PATH = Path("D:/datas/bundle/stocks.h5")

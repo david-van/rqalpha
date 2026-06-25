@@ -7,7 +7,7 @@
     python my_strategy/strategies/七星ETF轮动/run_七星高照.py
 
 结果输出:
-    my_strategy/strategies/batch_results/七星高照/
+    my_strategy/strategies/batch_results/七星高照_指数行业ETF/
 """
 
 import argparse
@@ -25,7 +25,7 @@ from rqalpha import run_file
 
 # ==================== 基础配置 ====================
 STRATEGY_FILE = os.path.join(project_root, 'my_strategy/strategies/七星ETF轮动/七星高照_strategy.py')
-BASE_RESULT_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results' / '七星高照'
+BASE_RESULT_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results' / '七星高照_指数行业ETF'
 BASE_RESULT_DIR.mkdir(exist_ok=True, parents=True)
 
 # 默认实验选择；直接运行本脚本时生效，命令行 --sweep / --layer 会覆盖这里。
@@ -50,8 +50,8 @@ BASE_RESULT_DIR.mkdir(exist_ok=True, parents=True)
 #   ACTIVE_SWEEP_ARGS = {}
 #   ACTIVE_SWEEP = "filter_layer"
 #   ACTIVE_SWEEP_ARGS = {"layer": "4_5"}
-ACTIVE_SWEEP = "score_sdl_grid_refined_small"
-ACTIVE_SWEEP_ARGS = {}
+ACTIVE_SWEEP = "filter_layer"
+ACTIVE_SWEEP_ARGS = {"layer": "1"}
 
 # 运行时状态，由 resolve_sweep() 根据 ACTIVE_SWEEP / 命令行参数生成。
 # 不需要手动修改这两个变量；想切换实验只改 ACTIVE_SWEEP / ACTIVE_SWEEP_ARGS。
@@ -74,7 +74,7 @@ def make_base_config(tag: str):
         "base": {
             "strategy_file": STRATEGY_FILE,
             "data_bundle_path": r"D:\datas\bundle",
-            "start_date": "2020-01-01",
+            "start_date": "2024-01-01",
             "end_date":   "2025-12-31",
             "frequency":  "1d",
             "accounts":   {"stock": 20000},

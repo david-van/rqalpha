@@ -530,9 +530,10 @@ class StrategyEngine:
         etf_metrics = []
         scores = {}
 
-        raw_scores = self.scorer.score(context, self.etf_pool)
+        scoring_pool = self._get_scoring_pool(context)
+        raw_scores = self.scorer.score(context, scoring_pool)
 
-        for etf in self.etf_pool:
+        for etf in scoring_pool:
             score = raw_scores.get(etf, float('-inf'))
             if score == float('-inf'):
                 continue
@@ -568,6 +569,21 @@ class StrategyEngine:
                     f"得分{m['score']:.4f} 年化{m['annualized_returns']*100:.2f}% "
                     f"R²={m['r_squared']:.4f}"
                 )
+
+    def _get_scoring_pool(self, context):
+        """打分前先应用未上市过滤，避免 history_bars 读取未上市标的报错。"""
+        scoring_pool = list(self.etf_pool)
+        for f in self.filters:
+            if f.name != 'listing' or not f.enabled:
+                continue
+            scoring_pool, removed = f.filter(context, scoring_pool, {})
+            if removed:
+                PlatformAdapter.log_info(
+                    f"上市前置过滤排除 {len(removed)} 只: "
+                    f"{' | '.join(removed.keys())}"
+                )
+            break
+        return scoring_pool
 
     def _ensure_filtered(self, context):
         """确保已过滤：对缓存排名应用全部过滤器，输出统一报告"""
@@ -695,17 +711,56 @@ def buy_trade(context, bar_dict=None):
 # 【配置层】
 # ============================================================
 
+ORIGINAL_ETF_POOL = [
+    "518880.XSHG",   # 黄金ETF
+    "159985.XSHE",   # 豆粕ETF
+    "501018.XSHG",   # 南方原油
+    "161226.XSHE",   # 白银LOF
+    "513100.XSHG",   # 纳指ETF
+    "159915.XSHE",   # 创业板ETF
+    "511220.XSHG",   # 城投债ETF
+]
+
+INDEX_INDUSTRY_ETF_POOL = [
+    "159865.XSHE",   # 养殖ETF
+    "159870.XSHE",   # 化工ETF
+    "515210.XSHG",   # 钢铁ETF
+    "516150.XSHG",   # 稀土ETF
+    "512400.XSHG",   # 有色ETF
+    "159996.XSHE",   # 家电ETF
+    "516910.XSHG",   # 物流ETF
+    "512200.XSHG",   # 房地产ETF
+    "159766.XSHE",   # 旅游ETF
+    "512800.XSHG",   # 银行ETF
+    "512880.XSHG",   # 证券ETF
+    "167301.XSHE",   # 保险主题LOF
+    "159745.XSHE",   # 建材ETF
+    "516970.XSHG",   # 基建ETF广发
+    "512670.XSHG",   # 国防ETF
+    "159869.XSHE",   # 游戏ETF
+    "515220.XSHG",   # 煤炭ETF
+    "561360.XSHG",   # 石油ETF
+    "512580.XSHG",   # 碳中和龙头ETF
+    "513120.XSHG",   # 港股创新药ETF
+    "512170.XSHG",   # 医疗ETF
+    "560080.XSHG",   # 中药ETF
+    "515790.XSHG",   # 光伏ETF
+    "159611.XSHE",   # 电力ETF
+    "561910.XSHG",   # 电池ETF
+    "161725.XSHE",   # 白酒基金LOF
+    "159512.XSHE",   # 汽车ETF
+    "159565.XSHE",   # 汽车零部件ETF
+    "560280.XSHG",   # 工程机械ETF
+    "159667.XSHE",   # 工业母机ETF
+    "159852.XSHE",   # 软件ETF
+    "515880.XSHG",   # 通信ETF
+    "512760.XSHG",   # 芯片ETF
+]
+
+
 DEFAULT_PARAMS = {
     # === ETF池 ===
-    'etf_pool': [
-        "518880.XSHG",   # 黄金ETF
-        "159985.XSHE",   # 豆粕ETF
-        "501018.XSHG",   # 南方原油
-        "161226.XSHE",   # 白银LOF
-        "513100.XSHG",   # 纳指ETF
-        "159915.XSHE",   # 创业板ETF
-        "511220.XSHG",   # 城投债ETF
-    ],
+    'etf_pool': INDEX_INDUSTRY_ETF_POOL,
 
     # === 核心参数 ===
     'holdings_num': 1,
