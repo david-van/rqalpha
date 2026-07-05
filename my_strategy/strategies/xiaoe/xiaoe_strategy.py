@@ -10,6 +10,10 @@ xiaoe_articles 股票池策略 — 多模式分配，最大化收益
   newest            — 只持有最新加入池的股票（博主最强信号）
   oldest            — 只持有待在池中最久的股票
   buy_and_hold      — 买入持有，不在池内股票间做再平衡，只在池变化时操作
+  buy_hold_low_vol_hybrid
+                   — 60% 买入持有底仓 + 低波动增强仓
+  low_vol_rebalance_hybrid
+                   — 全池等权底仓 + 低波动增强仓，定期整体再平衡
 """
 
 import bisect
@@ -105,6 +109,10 @@ DEFAULT_PARAMS = {
     'decay_ratio': 1.0,
     'switch_threshold': 1.0,
     'rebalance_days': 5,   # 无池变化时，至少间隔 N 个交易日才调仓 (momentum 模式)
+    'base_ratio': 0.6,     # buy_hold_low_vol_hybrid 的买入持有底仓比例
+    'enhance_ratio': 0.4,  # buy_hold_low_vol_hybrid 的增强仓上限
+    'low_vol_days': 60,    # 低波动计算窗口
+    'enhance_top_n': 2,    # 增强仓加给波动率最低的 N 只
 }
 
 
@@ -134,6 +142,11 @@ def init(context):
     context.pending_targets = None  # targets to execute today only
     context.ema_pending_targets = {}
     context.stock_slots = {}        # per-stock cash slot for buy_and_hold_ema
+    context.hybrid_base_units = {}   # virtual shares for buy-and-hold base sleeve
+    context.hybrid_enhance_units = {}
+    context.hybrid_pending_values = None
+    context.hybrid_last_rebalance = None
+    context.hybrid_days_since_rebalance = 0
     context.last_rebalance = None   # 上次调仓日期
     context.pool_changed = True     # 首日强制调仓
 
@@ -148,6 +161,9 @@ def init(context):
 
 def before_trading(context):
     """检查池是否变化"""
+    if getattr(context, 'hybrid_last_rebalance', None) is not None:
+        context.hybrid_days_since_rebalance = getattr(context, 'hybrid_days_since_rebalance', 0) + 1
+
     new_pool = context.loader.get_pool(context.now)
     if set(new_pool) != set(context.pool):
         logger.info(f"[池变化] {context.pool} → {new_pool}")
@@ -250,6 +266,240 @@ def _compute_buy_and_hold(context):
     return targets
 
 
+def _is_buy_hold_low_vol_hybrid_mode(context):
+    return context.params['mode'] in (
+        'buy_hold_low_vol_hybrid',
+        'buy_and_hold_low_vol_hybrid',
+        'bh_low_vol_hybrid',
+    )
+
+
+def _is_low_vol_rebalance_hybrid_mode(context):
+    return context.params['mode'] in (
+        'low_vol_rebalance_hybrid',
+        'low_vol_hybrid',
+        'low_vol_hybrid50',
+    )
+
+
+def _latest_price(code):
+    close = history_bars(code, 1, '1d', 'close', adjust_type='pre')
+    if close is None or len(close) == 0:
+        return None
+    price = float(np.asarray(close, dtype=float)[-1])
+    if not np.isfinite(price) or price <= 0:
+        return None
+    return price
+
+
+def _prices_for(codes):
+    prices = {}
+    for code in codes:
+        price = _latest_price(code)
+        if price is not None:
+            prices[code] = price
+    return prices
+
+
+def _units_to_values(units, prices, pool=None):
+    pool_set = set(pool) if pool is not None else None
+    values = {}
+    for code, unit in (units or {}).items():
+        if pool_set is not None and code not in pool_set:
+            continue
+        price = prices.get(code)
+        if price is None:
+            continue
+        value = float(unit) * price
+        if value > 1:
+            values[code] = value
+    return values
+
+
+def _values_to_units(values, prices):
+    units = {}
+    for code, value in values.items():
+        price = prices.get(code)
+        if price is None or price <= 0 or value <= 1:
+            continue
+        units[code] = float(value) / price
+    return units
+
+
+def _volatility_score(code, days):
+    close = history_bars(code, days + 1, '1d', 'close', adjust_type='pre')
+    if close is None or len(close) < days + 1:
+        return float('inf')
+
+    close = np.asarray(close, dtype=float)
+    if np.any(close[:-1] <= 0):
+        return float('inf')
+
+    returns = close[1:] / close[:-1] - 1
+    returns = returns[np.isfinite(returns)]
+    if len(returns) < days:
+        return float('inf')
+    vol = float(np.std(returns, ddof=1))
+    return vol if np.isfinite(vol) else float('inf')
+
+
+def _low_vol_candidates(pool, days, top_n):
+    scored = []
+    for code in pool:
+        vol = _volatility_score(code, days)
+        if vol != float('inf'):
+            scored.append((code, vol))
+    scored.sort(key=lambda item: (item[1], item[0]))
+    return [code for code, _ in scored[:top_n]]
+
+
+def _sync_hybrid_base_sleeve(context, prices):
+    """Sync the buy-and-hold base sleeve only when the pool changes."""
+    pool = list(context.pool)
+    base_ratio = float(context.params.get('base_ratio', 0.6))
+    base_budget = max(0.0, context.portfolio.total_value * base_ratio)
+
+    if not pool or base_budget <= 0:
+        context.hybrid_base_units = {}
+        return {}
+
+    old_units = getattr(context, 'hybrid_base_units', {}) or {}
+    base_values = _units_to_values(old_units, prices, pool)
+
+    if not base_values:
+        per_stock = base_budget / len(pool)
+        base_values = {code: per_stock for code in pool if code in prices}
+    else:
+        per_new_stock = base_budget / len(pool)
+        for code in pool:
+            if code not in base_values and code in prices:
+                base_values[code] = per_new_stock
+
+        current_total = sum(base_values.values())
+        if current_total > 0:
+            if current_total > base_budget:
+                scale = base_budget / current_total
+                base_values = {code: value * scale for code, value in base_values.items()}
+            elif current_total < base_budget and base_values:
+                extra = (base_budget - current_total) / len(base_values)
+                base_values = {code: value + extra for code, value in base_values.items()}
+
+    context.hybrid_base_units = _values_to_units(base_values, prices)
+    return base_values
+
+
+def _current_hybrid_base_values(context, prices):
+    return _units_to_values(getattr(context, 'hybrid_base_units', {}) or {}, prices, context.pool)
+
+
+def _compute_hybrid_enhance_values(context, prices, base_values):
+    pool = list(context.pool)
+    enhance_ratio = float(context.params.get('enhance_ratio', 0.4))
+    top_n = int(context.params.get('enhance_top_n', 2))
+    low_vol_days = int(context.params.get('low_vol_days', 60))
+
+    base_total = sum(base_values.values())
+    capacity = max(0.0, context.portfolio.total_value - base_total)
+    enhance_budget = min(max(0.0, context.portfolio.total_value * enhance_ratio), capacity)
+    candidates = _low_vol_candidates(pool, low_vol_days, top_n)
+    if not candidates or enhance_budget <= 0:
+        context.hybrid_enhance_units = {}
+        return {}
+
+    per_stock = enhance_budget / len(candidates)
+    enhance_values = {code: per_stock for code in candidates if code in prices}
+    context.hybrid_enhance_units = _values_to_units(enhance_values, prices)
+    logger.info(
+        f"[bh_low_vol] enhance candidates={candidates} "
+        f"budget={enhance_budget:.2f}"
+    )
+    return enhance_values
+
+
+def _should_rebalance_hybrid(context):
+    if context.pool_changed:
+        return True
+    if getattr(context, 'hybrid_last_rebalance', None) is None:
+        return True
+    days = getattr(context, 'hybrid_days_since_rebalance', 0)
+    return days >= int(context.params.get('rebalance_days', 20))
+
+
+def _compute_buy_hold_low_vol_hybrid_values(context):
+    pool = list(context.pool)
+    codes = set(pool)
+    codes.update(getattr(context, 'hybrid_base_units', {}) or {})
+    codes.update(getattr(context, 'hybrid_enhance_units', {}) or {})
+    prices = _prices_for(codes)
+
+    if not pool:
+        context.hybrid_base_units = {}
+        context.hybrid_enhance_units = {}
+        return {}
+
+    if context.pool_changed or not getattr(context, 'hybrid_base_units', None):
+        base_values = _sync_hybrid_base_sleeve(context, prices)
+    else:
+        base_values = _current_hybrid_base_values(context, prices)
+
+    enhance_values = _compute_hybrid_enhance_values(context, prices, base_values)
+
+    targets = {}
+    for code, value in base_values.items():
+        targets[code] = targets.get(code, 0.0) + value
+    for code, value in enhance_values.items():
+        targets[code] = targets.get(code, 0.0) + value
+
+    context.hybrid_last_rebalance = context.now
+    context.hybrid_days_since_rebalance = 0
+    context.pool_changed = False
+    return {code: value for code, value in targets.items() if value > 1}
+
+
+def _compute_low_vol_rebalance_hybrid_values(context):
+    """Full-rebalance low-vol hybrid: base equal weight + low-vol tilt."""
+    pool = list(context.pool)
+    prices = _prices_for(pool)
+    tradable_pool = [code for code in pool if code in prices]
+
+    if not tradable_pool:
+        context.pool_changed = False
+        return {}
+
+    total_value = context.portfolio.total_value
+    base_ratio = float(context.params.get('base_ratio', 0.5))
+    enhance_ratio = float(context.params.get('enhance_ratio', 0.5))
+    low_vol_days = int(context.params.get('low_vol_days', 60))
+    top_n = int(context.params.get('enhance_top_n', 2))
+
+    targets = {}
+    base_budget = max(0.0, total_value * base_ratio)
+    base_per_stock = base_budget / len(tradable_pool)
+    for code in tradable_pool:
+        targets[code] = base_per_stock
+
+    candidates = _low_vol_candidates(tradable_pool, low_vol_days, top_n)
+    enhance_budget = max(0.0, total_value * enhance_ratio)
+    if candidates and enhance_budget > 0:
+        enhance_per_stock = enhance_budget / len(candidates)
+        for code in candidates:
+            targets[code] = targets.get(code, 0.0) + enhance_per_stock
+    elif enhance_budget > 0:
+        # If volatility data is unavailable, stay fully invested through equal weight.
+        fallback_extra = enhance_budget / len(tradable_pool)
+        for code in tradable_pool:
+            targets[code] = targets.get(code, 0.0) + fallback_extra
+
+    context.hybrid_last_rebalance = context.now
+    context.hybrid_days_since_rebalance = 0
+    context.pool_changed = False
+    logger.info(
+        f"[low_vol_reb] candidates={candidates} "
+        f"base={base_ratio:.0%} enhance={enhance_ratio:.0%}"
+    )
+    return {code: value for code, value in targets.items() if value > 1}
+
+
 def _position_quantity(pos):
     return getattr(pos, 'quantity', 0) if pos else 0
 
@@ -274,6 +524,92 @@ def _set_slot_cash(context, code, value):
 
 def _is_buy_and_hold_ema_mode(context):
     return context.params['mode'] in ('buy_and_hold_ema', 'buy_and_hold_ema60')
+
+
+def _sell_buy_hold_low_vol_hybrid(context):
+    if not _should_rebalance_hybrid(context):
+        context.hybrid_pending_values = None
+        return
+
+    targets = _compute_buy_hold_low_vol_hybrid_values(context)
+    context.hybrid_pending_values = targets
+
+    holdings = [c for c in context.portfolio.positions
+                if context.portfolio.positions[c].quantity > 0]
+    for code in holdings:
+        pos = context.portfolio.positions.get(code)
+        current_value = _position_market_value(pos)
+        target_value = targets.get(code, 0.0)
+        tolerance = max(100.0, target_value * 0.001)
+        if current_value > target_value + tolerance:
+            order_target_value(code, target_value)
+            logger.info(
+                f"[bh_low_vol] sell/reduce {code} "
+                f"{current_value:.2f}->{target_value:.2f}"
+            )
+
+
+def _buy_buy_hold_low_vol_hybrid(context):
+    targets = getattr(context, 'hybrid_pending_values', None)
+    if targets is None:
+        return
+
+    for code, target_value in targets.items():
+        pos = context.portfolio.positions.get(code)
+        current_value = _position_market_value(pos)
+        tolerance = max(100.0, target_value * 0.001)
+        if current_value + tolerance >= target_value:
+            continue
+        order_target_value(code, target_value)
+        logger.info(
+            f"[bh_low_vol] buy/add {code} "
+            f"{current_value:.2f}->{target_value:.2f}"
+        )
+
+    context.hybrid_pending_values = None
+
+
+def _sell_low_vol_rebalance_hybrid(context):
+    if not _should_rebalance_hybrid(context):
+        context.hybrid_pending_values = None
+        return
+
+    targets = _compute_low_vol_rebalance_hybrid_values(context)
+    context.hybrid_pending_values = targets
+
+    holdings = [c for c in context.portfolio.positions
+                if context.portfolio.positions[c].quantity > 0]
+    for code in holdings:
+        pos = context.portfolio.positions.get(code)
+        current_value = _position_market_value(pos)
+        target_value = targets.get(code, 0.0)
+        tolerance = max(100.0, target_value * 0.001)
+        if current_value > target_value + tolerance:
+            order_target_value(code, target_value)
+            logger.info(
+                f"[low_vol_reb] sell/reduce {code} "
+                f"{current_value:.2f}->{target_value:.2f}"
+            )
+
+
+def _buy_low_vol_rebalance_hybrid(context):
+    targets = getattr(context, 'hybrid_pending_values', None)
+    if targets is None:
+        return
+
+    for code, target_value in targets.items():
+        pos = context.portfolio.positions.get(code)
+        current_value = _position_market_value(pos)
+        tolerance = max(100.0, target_value * 0.001)
+        if current_value + tolerance >= target_value:
+            continue
+        order_target_value(code, target_value)
+        logger.info(
+            f"[low_vol_reb] buy/add {code} "
+            f"{current_value:.2f}->{target_value:.2f}"
+        )
+
+    context.hybrid_pending_values = None
 
 
 def _ema_log_tag(context):
@@ -549,6 +885,14 @@ def _should_rebalance(context):
 
 def sell_trade(context, bar_dict):
     """计算目标并卖出非持有标的"""
+    if _is_low_vol_rebalance_hybrid_mode(context):
+        _sell_low_vol_rebalance_hybrid(context)
+        return
+
+    if _is_buy_hold_low_vol_hybrid_mode(context):
+        _sell_buy_hold_low_vol_hybrid(context)
+        return
+
     if _is_buy_and_hold_ema_mode(context):
         _sell_buy_and_hold_ema(context)
         return
@@ -578,6 +922,14 @@ def sell_trade(context, bar_dict):
 
 def buy_trade(context, bar_dict):
     """按目标权重买入"""
+    if _is_low_vol_rebalance_hybrid_mode(context):
+        _buy_low_vol_rebalance_hybrid(context)
+        return
+
+    if _is_buy_hold_low_vol_hybrid_mode(context):
+        _buy_buy_hold_low_vol_hybrid(context)
+        return
+
     if _is_buy_and_hold_ema_mode(context):
         _buy_buy_and_hold_ema(context)
         return

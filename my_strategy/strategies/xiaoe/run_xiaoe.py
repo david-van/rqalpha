@@ -97,9 +97,42 @@ def _override(mode, **kw):
 
 # ── 模式1: 对比（2 组）── buy_and_hold vs equal_weight
 EXPERIMENTS = [
-    # ("buy_and_hold",     _override("buy_and_hold")),
-    (f"buy_and_hold_ema{_EMA_DAYS}", _override("buy_and_hold_ema", ema_days=_EMA_DAYS)),
-    # ("equal_weight",     _override("equal_weight")),
+    ("low_vol_reb_b50_e50_v60_n2_r20",
+     _override(
+         "low_vol_rebalance_hybrid",
+         base_ratio=0.5,
+         enhance_ratio=0.5,
+         low_vol_days=60,
+         enhance_top_n=2,
+         rebalance_days=20,
+     )),
+    ("low_vol_reb_b60_e40_v60_n2_r20",
+     _override(
+         "low_vol_rebalance_hybrid",
+         base_ratio=0.6,
+         enhance_ratio=0.4,
+         low_vol_days=60,
+         enhance_top_n=2,
+         rebalance_days=20,
+     )),
+    ("low_vol_reb_b70_e30_v60_n2_r20",
+     _override(
+         "low_vol_rebalance_hybrid",
+         base_ratio=0.7,
+         enhance_ratio=0.3,
+         low_vol_days=60,
+         enhance_top_n=2,
+         rebalance_days=20,
+     )),
+    ("bh_low_vol_b60_e40_v60_n2_r20",
+     _override(
+         "buy_hold_low_vol_hybrid",
+         base_ratio=0.6,
+         enhance_ratio=0.4,
+         low_vol_days=60,
+         enhance_top_n=2,
+         rebalance_days=20,
+     )),
 ]
 
 # ── 模式2: momentum_top 参数扫描（m_days × top_n，21 组）──
@@ -131,7 +164,7 @@ EXPERIMENTS = [
 # ── 模式5: 海龟仓位管理 ──
 _TURTLE_BASE = {"pool_csv_dir": POOL_DIR}
 EXPERIMENTS_TURTLE = [
-    ("turtle",          dict(risk_pct=0.03, max_units=3, stop_atr=5.0, reentry_days=20, **_TURTLE_BASE)),
+    # ("turtle",          dict(risk_pct=0.03, max_units=3, stop_atr=5.0, reentry_days=20, **_TURTLE_BASE)),
     # ("turtle_r2",       dict(risk_pct=0.02, max_units=3, stop_atr=5.0, reentry_days=20, **_TURTLE_BASE)),
     # ("turtle_r4",       dict(risk_pct=0.04, max_units=3, stop_atr=5.0, reentry_days=20, **_TURTLE_BASE)),
     # ("turtle_u4",       dict(risk_pct=0.03, max_units=4, stop_atr=5.0, reentry_days=20, **_TURTLE_BASE)),
@@ -173,16 +206,16 @@ def main():
     metrics_list = []
     portfolios = {}
 
-    # for tag, override in EXPERIMENTS:
-    #     try:
-    #         result = run_one(tag, override)
-    #         metrics_list.append(extract_metrics(tag, result))
-    #         pf = result.get('sys_analyser', {}).get('portfolio')
-    #         if pf is not None:
-    #             portfolios[tag] = pf['unit_net_value']
-    #     except Exception as e:
-    #         print(f'[{tag}] 回测失败: {e}')
-    #         metrics_list.append({'tag': tag, 'error': str(e)})
+    for tag, override in EXPERIMENTS:
+        try:
+            result = run_one(tag, override)
+            metrics_list.append(extract_metrics(tag, result))
+            pf = result.get('sys_analyser', {}).get('portfolio')
+            if pf is not None:
+                portfolios[tag] = pf['unit_net_value']
+        except Exception as e:
+            print(f'[{tag}] 回测失败: {e}')
+            metrics_list.append({'tag': tag, 'error': str(e)})
 
     for tag, override in EXPERIMENTS_TURTLE:
         try:
