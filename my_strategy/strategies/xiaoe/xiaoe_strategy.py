@@ -14,6 +14,12 @@ xiaoe_articles 股票池策略 — 多模式分配，最大化收益
                    — 60% 买入持有底仓 + 低波动增强仓
   low_vol_rebalance_hybrid
                    — 全池等权底仓 + 低波动增强仓，定期整体再平衡
+  low_position_hybrid
+                   — 全池等权底仓 + 低位/不过热增强仓
+  momentum_skip_recent_hybrid
+                   — 全池等权底仓 + 中期动量增强仓，跳过最近涨幅
+  pullback_trend_hybrid
+                   — 全池等权底仓 + 中期趋势中短期回调增强仓
 """
 
 import bisect
@@ -113,6 +119,23 @@ DEFAULT_PARAMS = {
     'enhance_ratio': 0.4,  # buy_hold_low_vol_hybrid 的增强仓上限
     'low_vol_days': 60,    # 低波动计算窗口
     'enhance_top_n': 2,    # 增强仓加给波动率最低的 N 只
+    'low_position_days': 250,
+    'short_return_days': 20,
+    'max_recent_return': 0.30,
+    'vol_filter_days': 60,
+    'exclude_top_vol_pct': 0.30,
+    'max_position_ratio': 0.35,
+    'momentum_lookback_days': 120,
+    'momentum_skip_days': 20,
+    'min_mid_momentum': 0.0,
+    'tactical_reduce': False,
+    'entry_gain_reduce': 0.60,
+    'entry_gain_cut': 0.80,
+    'recent_gain_reduce': 0.25,
+    'market_filter': False,
+    'market_index': '000300.XSHG',
+    'market_ma_days': 200,
+    'weak_market_exposure': 0.60,
 }
 
 
@@ -147,6 +170,7 @@ def init(context):
     context.hybrid_pending_values = None
     context.hybrid_last_rebalance = None
     context.hybrid_days_since_rebalance = 0
+    context.pool_entry_prices = {}
     context.last_rebalance = None   # 上次调仓日期
     context.pool_changed = True     # 首日强制调仓
 
@@ -166,6 +190,9 @@ def before_trading(context):
 
     new_pool = context.loader.get_pool(context.now)
     if set(new_pool) != set(context.pool):
+        removed = set(context.pool) - set(new_pool)
+        for code in removed:
+            getattr(context, 'pool_entry_prices', {}).pop(code, None)
         logger.info(f"[池变化] {context.pool} → {new_pool}")
         context.pool = new_pool
         context.pool_changed = True
@@ -282,6 +309,19 @@ def _is_low_vol_rebalance_hybrid_mode(context):
     )
 
 
+def _is_constrained_rebalance_hybrid_mode(context):
+    return context.params['mode'] in (
+        'low_position_hybrid',
+        'low_position_tactical_hybrid',
+        'momentum_skip_recent_hybrid',
+        'pullback_trend_hybrid',
+    )
+
+
+def _hybrid_log_tag(context):
+    return str(context.params.get('mode', 'hybrid'))
+
+
 def _latest_price(code):
     close = history_bars(code, 1, '1d', 'close', adjust_type='pre')
     if close is None or len(close) == 0:
@@ -351,6 +391,277 @@ def _low_vol_candidates(pool, days, top_n):
             scored.append((code, vol))
     scored.sort(key=lambda item: (item[1], item[0]))
     return [code for code, _ in scored[:top_n]]
+
+
+def _close_series(code, days):
+    close = history_bars(code, days, '1d', 'close', adjust_type='pre')
+    if close is None or len(close) < days:
+        return None
+    close = np.asarray(close, dtype=float)
+    close = close[np.isfinite(close)]
+    if len(close) < days or np.any(close <= 0):
+        return None
+    return close
+
+
+def _recent_return(code, days):
+    close = _close_series(code, days + 1)
+    if close is None:
+        return None
+    return float(close[-1] / close[-1 - days] - 1)
+
+
+def _low_position_features(context, code):
+    lookback = int(context.params.get('low_position_days', 250))
+    recent_days = int(context.params.get('short_return_days', 20))
+    vol_days = int(context.params.get('vol_filter_days', 60))
+    days = max(lookback, recent_days, vol_days) + 1
+    close = _close_series(code, days)
+    if close is None:
+        return None
+
+    current = float(close[-1])
+    high = float(np.max(close[-lookback:]))
+    if high <= 0:
+        return None
+
+    recent_ret = float(close[-1] / close[-1 - recent_days] - 1)
+    vol_slice = close[-vol_days - 1:]
+    vol_ret = vol_slice[1:] / vol_slice[:-1] - 1
+    vol = float(np.std(vol_ret, ddof=1)) if len(vol_ret) >= vol_days else float('inf')
+    if not np.isfinite(vol):
+        return None
+
+    drawdown = current / high - 1
+    return {
+        'drawdown': float(drawdown),
+        'recent_ret': recent_ret,
+        'vol': vol,
+    }
+
+
+def _low_position_candidates(context, pool, top_n):
+    rows = []
+    for code in pool:
+        features = _low_position_features(context, code)
+        if features is None:
+            continue
+        if features['recent_ret'] > float(context.params.get('max_recent_return', 0.30)):
+            continue
+        rows.append((code, features))
+
+    if not rows:
+        return []
+
+    exclude_pct = max(0.0, min(1.0, float(context.params.get('exclude_top_vol_pct', 0.30))))
+    if len(rows) > 1 and exclude_pct > 0:
+        vol_sorted = sorted(rows, key=lambda item: item[1]['vol'], reverse=True)
+        exclude_n = min(len(rows) - 1, int(math.ceil(len(rows) * exclude_pct)))
+        excluded = {code for code, _ in vol_sorted[:exclude_n]}
+        rows = [(code, features) for code, features in rows if code not in excluded]
+
+    rows.sort(
+        key=lambda item: (
+            item[1]['drawdown'],
+            item[1]['recent_ret'],
+            item[1]['vol'],
+            item[0],
+        )
+    )
+    return [code for code, _ in rows[:top_n]]
+
+
+def _momentum_skip_recent_score(context, code):
+    lookback = int(context.params.get('momentum_lookback_days', 120))
+    skip = int(context.params.get('momentum_skip_days', 20))
+    close = _close_series(code, lookback + 1)
+    if close is None or lookback <= skip:
+        return None
+    return float(close[-1 - skip] / close[-1 - lookback] - 1)
+
+
+def _pullback_trend_score(context, code):
+    mid = _momentum_skip_recent_score(context, code)
+    if mid is None:
+        return None
+    min_mid = float(context.params.get('min_mid_momentum', 0.0))
+    if mid < min_mid:
+        return None
+    recent_days = int(context.params.get('momentum_skip_days', 20))
+    recent = _recent_return(code, recent_days)
+    if recent is None:
+        return None
+    if recent > float(context.params.get('max_recent_return', 0.30)):
+        return None
+    return float(mid - recent)
+
+
+def _score_candidates(context, pool, top_n, score_func):
+    scored = []
+    for code in pool:
+        score = score_func(context, code)
+        if score is None or not np.isfinite(score):
+            continue
+        scored.append((code, float(score)))
+    scored.sort(key=lambda item: (item[1], item[0]), reverse=True)
+    return [code for code, _ in scored[:top_n]]
+
+
+def _sync_pool_entry_prices(context, prices):
+    entry_prices = getattr(context, 'pool_entry_prices', {}) or {}
+    for code in context.pool:
+        price = prices.get(code)
+        if code not in entry_prices and price is not None and price > 0:
+            entry_prices[code] = price
+    context.pool_entry_prices = entry_prices
+
+
+def _apply_target_value_cap(targets, total_value, max_ratio):
+    if total_value <= 0 or max_ratio is None or max_ratio <= 0:
+        return targets
+
+    cap_value = total_value * max_ratio
+    capped = dict(targets)
+    for _ in range(10):
+        excess = 0.0
+        for code, value in list(capped.items()):
+            if value > cap_value:
+                excess += value - cap_value
+                capped[code] = cap_value
+        if excess <= 1:
+            break
+
+        receivers = [code for code, value in capped.items() if value < cap_value - 1]
+        if not receivers:
+            break
+        add_value = excess / len(receivers)
+        for code in receivers:
+            capped[code] = min(cap_value, capped[code] + add_value)
+
+    return capped
+
+
+def _market_exposure(context):
+    if not context.params.get('market_filter', False):
+        return 1.0
+
+    index = context.params.get('market_index', '000300.XSHG')
+    ma_days = int(context.params.get('market_ma_days', 200))
+    close = history_bars(index, ma_days + 1, '1d', 'close', adjust_type='pre')
+    if close is None or len(close) < ma_days:
+        return 1.0
+
+    close = np.asarray(close, dtype=float)
+    latest = float(close[-1])
+    ma = float(np.mean(close[-ma_days:]))
+    if not np.isfinite(latest) or not np.isfinite(ma) or ma <= 0:
+        return 1.0
+    if latest >= ma:
+        return 1.0
+    return max(0.0, min(1.0, float(context.params.get('weak_market_exposure', 0.60))))
+
+
+def _apply_market_filter(context, targets):
+    exposure = _market_exposure(context)
+    if exposure >= 0.999:
+        return targets
+    logger.info(f"[{_hybrid_log_tag(context)}] market exposure={exposure:.0%}")
+    return {code: value * exposure for code, value in targets.items()}
+
+
+def _apply_tactical_reduce(context, targets, base_values, prices):
+    if not context.params.get('tactical_reduce', False) and context.params['mode'] != 'low_position_tactical_hybrid':
+        return targets
+
+    reduced = dict(targets)
+    entry_prices = getattr(context, 'pool_entry_prices', {}) or {}
+    recent_days = int(context.params.get('short_return_days', 20))
+    reduce_gain = float(context.params.get('entry_gain_reduce', 0.60))
+    cut_gain = float(context.params.get('entry_gain_cut', 0.80))
+    recent_threshold = float(context.params.get('recent_gain_reduce', 0.25))
+
+    for code in list(reduced):
+        entry = entry_prices.get(code)
+        price = prices.get(code)
+        if entry is None or price is None or entry <= 0:
+            continue
+        since_entry = float(price / entry - 1)
+        recent = _recent_return(code, recent_days)
+        if recent is None:
+            continue
+
+        base_value = base_values.get(code, 0.0)
+        if since_entry >= cut_gain:
+            reduced[code] = min(reduced[code], base_value)
+            logger.info(f"[{_hybrid_log_tag(context)}] cut enhance {code} gain={since_entry:.2%}")
+        elif since_entry >= reduce_gain and recent >= recent_threshold:
+            reduced[code] = min(reduced[code], base_value)
+            logger.info(
+                f"[{_hybrid_log_tag(context)}] reduce enhance {code} "
+                f"gain={since_entry:.2%} recent={recent:.2%}"
+            )
+    return reduced
+
+
+def _enhance_candidates(context, tradable_pool):
+    mode = context.params['mode']
+    top_n = int(context.params.get('enhance_top_n', 2))
+    if mode in ('low_position_hybrid', 'low_position_tactical_hybrid'):
+        return _low_position_candidates(context, tradable_pool, top_n)
+    if mode == 'momentum_skip_recent_hybrid':
+        return _score_candidates(context, tradable_pool, top_n, _momentum_skip_recent_score)
+    if mode == 'pullback_trend_hybrid':
+        return _score_candidates(context, tradable_pool, top_n, _pullback_trend_score)
+    return []
+
+
+def _compute_constrained_rebalance_hybrid_values(context):
+    pool = list(context.pool)
+    prices = _prices_for(pool)
+    tradable_pool = [code for code in pool if code in prices]
+
+    if not tradable_pool:
+        context.pool_changed = False
+        return {}
+
+    _sync_pool_entry_prices(context, prices)
+
+    total_value = context.portfolio.total_value
+    base_ratio = float(context.params.get('base_ratio', 0.7))
+    enhance_ratio = float(context.params.get('enhance_ratio', 0.3))
+
+    base_budget = max(0.0, total_value * base_ratio)
+    enhance_budget = max(0.0, total_value * enhance_ratio)
+    base_per_stock = base_budget / len(tradable_pool)
+    base_values = {code: base_per_stock for code in tradable_pool}
+    targets = dict(base_values)
+
+    candidates = _enhance_candidates(context, tradable_pool)
+    if candidates and enhance_budget > 0:
+        enhance_per_stock = enhance_budget / len(candidates)
+        for code in candidates:
+            targets[code] = targets.get(code, 0.0) + enhance_per_stock
+    elif enhance_budget > 0:
+        fallback_extra = enhance_budget / len(tradable_pool)
+        for code in tradable_pool:
+            targets[code] = targets.get(code, 0.0) + fallback_extra
+
+    targets = _apply_target_value_cap(
+        targets,
+        total_value,
+        float(context.params.get('max_position_ratio', 0.35)),
+    )
+    targets = _apply_tactical_reduce(context, targets, base_values, prices)
+    targets = _apply_market_filter(context, targets)
+
+    context.hybrid_last_rebalance = context.now
+    context.hybrid_days_since_rebalance = 0
+    context.pool_changed = False
+    logger.info(
+        f"[{_hybrid_log_tag(context)}] candidates={candidates} "
+        f"base={base_ratio:.0%} enhance={enhance_ratio:.0%}"
+    )
+    return {code: value for code, value in targets.items() if value > 1}
 
 
 def _sync_hybrid_base_sleeve(context, prices):
@@ -606,6 +917,49 @@ def _buy_low_vol_rebalance_hybrid(context):
         order_target_value(code, target_value)
         logger.info(
             f"[low_vol_reb] buy/add {code} "
+            f"{current_value:.2f}->{target_value:.2f}"
+        )
+
+    context.hybrid_pending_values = None
+
+
+def _sell_constrained_rebalance_hybrid(context):
+    if not _should_rebalance_hybrid(context):
+        context.hybrid_pending_values = None
+        return
+
+    targets = _compute_constrained_rebalance_hybrid_values(context)
+    context.hybrid_pending_values = targets
+
+    holdings = [c for c in context.portfolio.positions
+                if context.portfolio.positions[c].quantity > 0]
+    for code in holdings:
+        pos = context.portfolio.positions.get(code)
+        current_value = _position_market_value(pos)
+        target_value = targets.get(code, 0.0)
+        tolerance = max(100.0, target_value * 0.001)
+        if current_value > target_value + tolerance:
+            order_target_value(code, target_value)
+            logger.info(
+                f"[{_hybrid_log_tag(context)}] sell/reduce {code} "
+                f"{current_value:.2f}->{target_value:.2f}"
+            )
+
+
+def _buy_constrained_rebalance_hybrid(context):
+    targets = getattr(context, 'hybrid_pending_values', None)
+    if targets is None:
+        return
+
+    for code, target_value in targets.items():
+        pos = context.portfolio.positions.get(code)
+        current_value = _position_market_value(pos)
+        tolerance = max(100.0, target_value * 0.001)
+        if current_value + tolerance >= target_value:
+            continue
+        order_target_value(code, target_value)
+        logger.info(
+            f"[{_hybrid_log_tag(context)}] buy/add {code} "
             f"{current_value:.2f}->{target_value:.2f}"
         )
 
@@ -889,6 +1243,10 @@ def sell_trade(context, bar_dict):
         _sell_low_vol_rebalance_hybrid(context)
         return
 
+    if _is_constrained_rebalance_hybrid_mode(context):
+        _sell_constrained_rebalance_hybrid(context)
+        return
+
     if _is_buy_hold_low_vol_hybrid_mode(context):
         _sell_buy_hold_low_vol_hybrid(context)
         return
@@ -924,6 +1282,10 @@ def buy_trade(context, bar_dict):
     """按目标权重买入"""
     if _is_low_vol_rebalance_hybrid_mode(context):
         _buy_low_vol_rebalance_hybrid(context)
+        return
+
+    if _is_constrained_rebalance_hybrid_mode(context):
+        _buy_constrained_rebalance_hybrid(context)
         return
 
     if _is_buy_hold_low_vol_hybrid_mode(context):
