@@ -20,6 +20,8 @@ xiaoe_articles 股票池策略 — 多模式分配，最大化收益
                    — 全池等权底仓 + 中期动量增强仓，跳过最近涨幅
   pullback_trend_hybrid
                    — 全池等权底仓 + 中期趋势中短期回调增强仓
+  moderate_pullback_pos_trend_hybrid
+                   — 全池等权底仓 + 正中期趋势、适度短期回调增强仓
 """
 
 import bisect
@@ -118,6 +120,7 @@ DEFAULT_PARAMS = {
     'base_ratio': 0.6,     # buy_hold_low_vol_hybrid 的买入持有底仓比例
     'enhance_ratio': 0.4,  # buy_hold_low_vol_hybrid 的增强仓上限
     'low_vol_days': 60,    # 低波动计算窗口
+    'vol_prefer': 'low',
     'enhance_top_n': 2,    # 增强仓加给波动率最低的 N 只
     'low_position_days': 250,
     'short_return_days': 20,
@@ -128,6 +131,7 @@ DEFAULT_PARAMS = {
     'momentum_lookback_days': 120,
     'momentum_skip_days': 20,
     'min_mid_momentum': 0.0,
+    'min_recent_return': -0.20,
     'tactical_reduce': False,
     'entry_gain_reduce': 0.60,
     'entry_gain_cut': 0.80,
@@ -304,8 +308,11 @@ def _is_buy_hold_low_vol_hybrid_mode(context):
 def _is_low_vol_rebalance_hybrid_mode(context):
     return context.params['mode'] in (
         'low_vol_rebalance_hybrid',
+        'high_vol_rebalance_hybrid',
         'low_vol_hybrid',
+        'high_vol_hybrid',
         'low_vol_hybrid50',
+        'high_vol_hybrid50',
     )
 
 
@@ -315,6 +322,7 @@ def _is_constrained_rebalance_hybrid_mode(context):
         'low_position_tactical_hybrid',
         'momentum_skip_recent_hybrid',
         'pullback_trend_hybrid',
+        'moderate_pullback_pos_trend_hybrid',
     )
 
 
@@ -384,12 +392,17 @@ def _volatility_score(code, days):
 
 
 def _low_vol_candidates(pool, days, top_n):
+    return _volatility_candidates(pool, days, top_n, prefer='low')
+
+
+def _volatility_candidates(pool, days, top_n, prefer='low'):
     scored = []
     for code in pool:
         vol = _volatility_score(code, days)
         if vol != float('inf'):
             scored.append((code, vol))
-    scored.sort(key=lambda item: (item[1], item[0]))
+    reverse = prefer == 'high'
+    scored.sort(key=lambda item: (item[1], item[0]), reverse=reverse)
     return [code for code, _ in scored[:top_n]]
 
 
@@ -493,6 +506,25 @@ def _pullback_trend_score(context, code):
         return None
     if recent > float(context.params.get('max_recent_return', 0.30)):
         return None
+    return float(mid - recent)
+
+
+def _moderate_pullback_pos_trend_score(context, code):
+    mid = _momentum_skip_recent_score(context, code)
+    if mid is None:
+        return None
+    if mid < float(context.params.get('min_mid_momentum', 0.0)):
+        return None
+
+    recent_days = int(context.params.get('momentum_skip_days', 20))
+    recent = _recent_return(code, recent_days)
+    if recent is None:
+        return None
+    if recent < float(context.params.get('min_recent_return', -0.20)):
+        return None
+    if recent > float(context.params.get('max_recent_return', 0.30)):
+        return None
+
     return float(mid - recent)
 
 
@@ -612,6 +644,8 @@ def _enhance_candidates(context, tradable_pool):
         return _score_candidates(context, tradable_pool, top_n, _momentum_skip_recent_score)
     if mode == 'pullback_trend_hybrid':
         return _score_candidates(context, tradable_pool, top_n, _pullback_trend_score)
+    if mode == 'moderate_pullback_pos_trend_hybrid':
+        return _score_candidates(context, tradable_pool, top_n, _moderate_pullback_pos_trend_score)
     return []
 
 
@@ -782,6 +816,11 @@ def _compute_low_vol_rebalance_hybrid_values(context):
     enhance_ratio = float(context.params.get('enhance_ratio', 0.5))
     low_vol_days = int(context.params.get('low_vol_days', 60))
     top_n = int(context.params.get('enhance_top_n', 2))
+    vol_prefer = context.params.get('vol_prefer')
+    if context.params['mode'].startswith('high_vol') or context.params['mode'] == 'high_vol_hybrid':
+        vol_prefer = 'high'
+    if vol_prefer not in ('low', 'high'):
+        vol_prefer = 'low'
 
     targets = {}
     base_budget = max(0.0, total_value * base_ratio)
@@ -789,7 +828,7 @@ def _compute_low_vol_rebalance_hybrid_values(context):
     for code in tradable_pool:
         targets[code] = base_per_stock
 
-    candidates = _low_vol_candidates(tradable_pool, low_vol_days, top_n)
+    candidates = _volatility_candidates(tradable_pool, low_vol_days, top_n, vol_prefer)
     enhance_budget = max(0.0, total_value * enhance_ratio)
     if candidates and enhance_budget > 0:
         enhance_per_stock = enhance_budget / len(candidates)
@@ -805,7 +844,7 @@ def _compute_low_vol_rebalance_hybrid_values(context):
     context.hybrid_days_since_rebalance = 0
     context.pool_changed = False
     logger.info(
-        f"[low_vol_reb] candidates={candidates} "
+        f"[{vol_prefer}_vol_reb] candidates={candidates} "
         f"base={base_ratio:.0%} enhance={enhance_ratio:.0%}"
     )
     return {code: value for code, value in targets.items() if value > 1}
