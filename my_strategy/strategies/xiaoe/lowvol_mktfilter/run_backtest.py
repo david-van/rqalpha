@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from my_strategy.common_file import project_root
+from my_strategy.common_file import project_root, resolve_bundle_path
 from rqalpha import run_file
 
 STRATEGY_FILE = str(
@@ -30,7 +30,7 @@ def make_base_config(tag, start="2020-01-01", end="2026-01-01"):
     return {
         "base": {
             "strategy_file": STRATEGY_FILE,
-            "data_bundle_path": r"D:\datas\bundle",
+            "data_bundle_path": resolve_bundle_path(),
             "start_date": start,
             "end_date": end,
             "frequency": "1d",
