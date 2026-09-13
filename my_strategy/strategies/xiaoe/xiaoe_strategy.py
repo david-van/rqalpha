@@ -117,6 +117,8 @@ DEFAULT_PARAMS = {
     'decay_ratio': 1.0,
     'switch_threshold': 1.0,
     'rebalance_days': 5,   # 无池变化时，至少间隔 N 个交易日才调仓 (momentum 模式)
+    'rebalance_tolerance_pct': 0.001,   # 再平衡容差比例：市值偏离目标超过该比例才交易
+    'rebalance_tolerance_floor': 100.0, # 再平衡容差下限（元），小资金/高价股下至少偏离这么多才动
     'base_ratio': 0.6,     # buy_hold_low_vol_hybrid 的买入持有底仓比例
     'enhance_ratio': 0.4,  # buy_hold_low_vol_hybrid 的增强仓上限
     'low_vol_days': 60,    # 低波动计算窗口
@@ -140,6 +142,15 @@ DEFAULT_PARAMS = {
     'market_index': '000300.XSHG',
     'market_ma_days': 200,
     'weak_market_exposure': 0.60,
+    'market_filter_lag': False,     # True=只用昨日及以前数据判断（消除当日收盘价前视）
+    # —— 组合级风控叠加（降低回撤用）——
+    'risk_overlay': False,          # 总开关：在目标权重上叠加风控暴露系数
+    'dd_breaker': False,            # 回撤熔断：组合从高点回撤超阈值 → 降仓
+    'dd_threshold': -0.15,          # 触发降仓的回撤阈值（负数）
+    'dd_exposure': 0.60,            # 触发后保留的目标暴露
+    'vol_target': None,             # 年化波动率目标，None=关闭（例 0.20）
+    'vol_target_days': 60,          # 波动率估计窗口
+    'vol_target_index': '000300.XSHG',  # 波动率代理（大盘指数更稳定）
 }
 
 
@@ -189,6 +200,8 @@ def init(context):
 
 def before_trading(context):
     """检查池是否变化"""
+    _update_risk_state(context)
+
     if getattr(context, 'hybrid_last_rebalance', None) is not None:
         context.hybrid_days_since_rebalance = getattr(context, 'hybrid_days_since_rebalance', 0) + 1
 
@@ -579,13 +592,20 @@ def _market_exposure(context):
 
     index = context.params.get('market_index', '000300.XSHG')
     ma_days = int(context.params.get('market_ma_days', 200))
-    close = history_bars(index, ma_days + 1, '1d', 'close', adjust_type='pre')
-    if close is None or len(close) < ma_days:
+    lag = bool(context.params.get('market_filter_lag', False))
+    # lag=True 需多一根 bar：用昨日收盘 vs 昨日为止的 MA，避免当日收盘价前视
+    need = ma_days + (2 if lag else 1)
+    close = history_bars(index, need, '1d', 'close', adjust_type='pre')
+    if close is None or len(close) < need:
         return 1.0
 
     close = np.asarray(close, dtype=float)
-    latest = float(close[-1])
-    ma = float(np.mean(close[-ma_days:]))
+    if lag:
+        latest = float(close[-2])                       # 昨日收盘
+        ma = float(np.mean(close[-ma_days - 1:-1]))     # 昨日为止的 ma_days 日均线
+    else:
+        latest = float(close[-1])                       # 当日收盘
+        ma = float(np.mean(close[-ma_days:]))           # 含当日的 ma_days 日均线
     if not np.isfinite(latest) or not np.isfinite(ma) or ma <= 0:
         return 1.0
     if latest >= ma:
@@ -599,6 +619,76 @@ def _apply_market_filter(context, targets):
         return targets
     logger.info(f"[{_hybrid_log_tag(context)}] market exposure={exposure:.0%}")
     return {code: value * exposure for code, value in targets.items()}
+
+
+# ============================================================
+# 组合级风控叠加（市场趋势 + 回撤熔断 + 波动率目标，可独立开关）
+# ============================================================
+def _update_risk_state(context):
+    """更新组合净值峰值与当前回撤（供回撤熔断使用，before_trading 调用）。"""
+    if not context.params.get('dd_breaker', False):
+        return
+    tv = float(context.portfolio.total_value)
+    peak = getattr(context, 'risk_peak_value', None)
+    if peak is None or tv > peak:
+        context.risk_peak_value = tv
+    context.current_drawdown = tv / context.risk_peak_value - 1.0
+
+
+def _drawdown_exposure(context):
+    if not context.params.get('dd_breaker', False):
+        return 1.0
+    dd = float(getattr(context, 'current_drawdown', 0.0))
+    threshold = float(context.params.get('dd_threshold', -0.15))
+    if dd <= threshold:
+        return max(0.0, min(1.0, float(context.params.get('dd_exposure', 0.60))))
+    return 1.0
+
+
+def _vol_target_exposure(context):
+    target = context.params.get('vol_target', None)
+    if target is None or float(target) <= 0:
+        return 1.0
+    days = int(context.params.get('vol_target_days', 60))
+    index = context.params.get('vol_target_index', '000300.XSHG')
+    close = history_bars(index, days + 1, '1d', 'close', adjust_type='pre')
+    if close is None or len(close) < days + 1:
+        return 1.0
+    close = np.asarray(close, dtype=float)
+    if np.any(close[:-1] <= 0):
+        return 1.0
+    r = close[1:] / close[:-1] - 1
+    vol = float(np.std(r, ddof=1)) * math.sqrt(250)
+    if not np.isfinite(vol) or vol <= 0:
+        return 1.0
+    return max(0.0, min(1.0, float(target) / vol))
+
+
+def _risk_exposure(context):
+    """组合级风控暴露系数 e ∈ [0,1]，等于各独立风控项的乘积。"""
+    e = 1.0
+    if context.params.get('market_filter', False):
+        e *= _market_exposure(context)
+    if context.params.get('dd_breaker', False):
+        e *= _drawdown_exposure(context)
+    if context.params.get('vol_target', None):
+        e *= _vol_target_exposure(context)
+    return max(0.0, min(1.0, e))
+
+
+def _apply_risk_overlay(context, targets):
+    e = _risk_exposure(context)
+    if e >= 0.999:
+        return targets
+    logger.info(f"[{_hybrid_log_tag(context)}] risk exposure={e:.0%}")
+    return {code: value * e for code, value in targets.items()}
+
+
+def _rebalance_tolerance(context, target_value):
+    """再平衡容差：市值偏离目标超过该值才交易（小资金/高价股下靠 floor 兜底）。"""
+    pct = float(context.params.get('rebalance_tolerance_pct', 0.001))
+    floor = float(context.params.get('rebalance_tolerance_floor', 100.0))
+    return max(floor, float(target_value) * pct)
 
 
 def _apply_tactical_reduce(context, targets, base_values, prices):
@@ -847,6 +937,7 @@ def _compute_low_vol_rebalance_hybrid_values(context):
         f"[{vol_prefer}_vol_reb] candidates={candidates} "
         f"base={base_ratio:.0%} enhance={enhance_ratio:.0%}"
     )
+    targets = _apply_risk_overlay(context, targets)
     return {code: value for code, value in targets.items() if value > 1}
 
 
@@ -890,7 +981,7 @@ def _sell_buy_hold_low_vol_hybrid(context):
         pos = context.portfolio.positions.get(code)
         current_value = _position_market_value(pos)
         target_value = targets.get(code, 0.0)
-        tolerance = max(100.0, target_value * 0.001)
+        tolerance = _rebalance_tolerance(context, target_value)
         if current_value > target_value + tolerance:
             order_target_value(code, target_value)
             logger.info(
@@ -907,7 +998,7 @@ def _buy_buy_hold_low_vol_hybrid(context):
     for code, target_value in targets.items():
         pos = context.portfolio.positions.get(code)
         current_value = _position_market_value(pos)
-        tolerance = max(100.0, target_value * 0.001)
+        tolerance = _rebalance_tolerance(context, target_value)
         if current_value + tolerance >= target_value:
             continue
         order_target_value(code, target_value)
@@ -933,7 +1024,7 @@ def _sell_low_vol_rebalance_hybrid(context):
         pos = context.portfolio.positions.get(code)
         current_value = _position_market_value(pos)
         target_value = targets.get(code, 0.0)
-        tolerance = max(100.0, target_value * 0.001)
+        tolerance = _rebalance_tolerance(context, target_value)
         if current_value > target_value + tolerance:
             order_target_value(code, target_value)
             logger.info(
@@ -950,7 +1041,7 @@ def _buy_low_vol_rebalance_hybrid(context):
     for code, target_value in targets.items():
         pos = context.portfolio.positions.get(code)
         current_value = _position_market_value(pos)
-        tolerance = max(100.0, target_value * 0.001)
+        tolerance = _rebalance_tolerance(context, target_value)
         if current_value + tolerance >= target_value:
             continue
         order_target_value(code, target_value)
@@ -976,7 +1067,7 @@ def _sell_constrained_rebalance_hybrid(context):
         pos = context.portfolio.positions.get(code)
         current_value = _position_market_value(pos)
         target_value = targets.get(code, 0.0)
-        tolerance = max(100.0, target_value * 0.001)
+        tolerance = _rebalance_tolerance(context, target_value)
         if current_value > target_value + tolerance:
             order_target_value(code, target_value)
             logger.info(
@@ -993,7 +1084,7 @@ def _buy_constrained_rebalance_hybrid(context):
     for code, target_value in targets.items():
         pos = context.portfolio.positions.get(code)
         current_value = _position_market_value(pos)
-        tolerance = max(100.0, target_value * 0.001)
+        tolerance = _rebalance_tolerance(context, target_value)
         if current_value + tolerance >= target_value:
             continue
         order_target_value(code, target_value)
