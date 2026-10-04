@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from my_strategy.common_file import project_root
-from my_strategy.strategies.xiaoe.xiaoe_strategy import PoolLoader
+from my_strategy.strategies.xiaoe.legacy.xiaoe_strategy import PoolLoader
 from rqalpha.api import (
     history_bars, order_target_value, logger, scheduler,
 )

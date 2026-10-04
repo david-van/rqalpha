@@ -19,8 +19,8 @@ from rqalpha import run_file
 
 
 # ==================== 基础配置 ====================
-STRATEGY_FILE = os.path.join(project_root, 'my_strategy/strategies/xiaoe/xiaoe_strategy.py')
-STRATEGY_FILE_TURTLE = os.path.join(project_root, 'my_strategy/strategies/xiaoe/xiaoe_turtle.py')
+STRATEGY_FILE = os.path.join(project_root, 'my_strategy/strategies/xiaoe/legacy/xiaoe_strategy.py')
+STRATEGY_FILE_TURTLE = os.path.join(project_root, 'my_strategy/strategies/xiaoe/legacy/xiaoe_turtle.py')
 RESULT_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results' / 'xiaoe_pool'
 RESULT_DIR.mkdir(exist_ok=True, parents=True)
 

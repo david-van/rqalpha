@@ -11,7 +11,7 @@ from pathlib import Path
 import pandas as pd
 
 from my_strategy.common_file import project_root
-from my_strategy.strategies.xiaoe.run_xiaoe import make_base_config, _override
+from my_strategy.strategies.xiaoe.legacy.run_xiaoe import make_base_config, _override
 
 RESULT_DIR = Path(project_root) / 'my_strategy' / 'strategies' / 'batch_results' / 'xiaoe_pool' / 'risk_overlay'
 RESULT_DIR.mkdir(parents=True, exist_ok=True)

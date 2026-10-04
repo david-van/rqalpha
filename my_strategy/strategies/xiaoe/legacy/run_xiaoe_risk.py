@@ -23,7 +23,7 @@ from pathlib import Path
 import pandas as pd
 
 from my_strategy.common_file import project_root
-from my_strategy.strategies.xiaoe.run_xiaoe import (
+from my_strategy.strategies.xiaoe.legacy.run_xiaoe import (
     make_base_config, run_one, _override, POOL_DIR, STRATEGY_FILE,
 )
 
